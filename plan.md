@@ -4,8 +4,9 @@
 
 The user selected `paj-captain` for the text coordinator and `paj-voice` for standalone voice.
 Both projects depend on Paj/Pi; neither requires the other. The user subsequently approved starting
-text-only Captain, now implemented locally in `/home/jacob/Development/paj-captain`.
-No live installation changes, publication, or voice implementation have been made.
+text-only Captain, implemented in `/home/jacob/Development/paj-captain` and published at
+https://github.com/jlodenius/paj-captain. Its flake exports an optional Home Manager module.
+Voice remains unimplemented; Captain preferences remain separate from package installation.
 
 Text implementation uses a Pi extension, `/captain` activation, one workflow skill, private per-Pi
 session assignment storage, independent normal-tmux launches, and configurable reporting/workspaces.
@@ -13,8 +14,8 @@ Linux util-linux `flock` provides crash-released transaction locking. Automated 
 Pi activation/reload/session replacement, isolated Paj messaging, isolated tmux, and crash recovery.
 
 A manual Captain-to-main-agent delegation and correlated result roundtrip also succeeded. Shared
-read-only `inspect_agent` is now implemented locally in Paj, with conditional Captain integration.
-It is not yet installed or published. Tests cover actual Pi idle/busy streaming inspection and
+read-only `inspect_agent` is published in Paj, with conditional Captain integration. Updated Paj
+must be loaded in both caller and target. Tests cover actual Pi idle/busy streaming inspection and
 owned-subagent access without additional target model turns or conversation mutation.
 
 Two independent GPT 6.1 sol reviews (medium and max thinking) found no substantive issues in the
@@ -426,7 +427,8 @@ Tests exercise actual Pi active-branch snapshots, idle and busy streaming states
 access, denied cross-owner/child-parent access, and no extra target model turns or session writes.
 Unit checks cover privacy projection, identity/scope changes, socket lifecycle, path/byte limits,
 timeouts, and aborts. Existing Paj messaging and paj-rc compatibility checks remain passing.
-Installation and a manual user trial with updated caller/worker Paj extensions remain to be done.
+Install through the published GitHub flakes and reload caller/worker Paj extensions for manual
+user trials. The Captain Home Manager module installs resources without replacing captain.json.
 
 ### Phase 2: voice foundation
 
