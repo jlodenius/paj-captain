@@ -4,6 +4,8 @@
   "description": "Text-first coordination of main Paj agents inside Pi",
   "type": "module",
   "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/jlodenius/paj-captain.git" },
+  "homepage": "https://github.com/jlodenius/paj-captain",
   "engines": { "node": ">=24" },
   "keywords": ["pi-package", "paj"],
   "files": ["extensions", "src", "skills", "examples", "README.md", "plan.md", "LICENSE"],

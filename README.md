@@ -8,10 +8,10 @@ Enable Captain in an existing session with `/captain`; ordinary sessions stay un
 Requires Pi 1.2.0 or newer, Paj, Node.js 24 or newer, tmux, and `flock` (util-linux) on Linux.
 Tested with tmux 3.7c.
 
-For this local development checkout:
+Install Paj first, then add the Pi package:
 
 ```sh
-pi install /path/to/paj-captain
+pi install git:github.com/jlodenius/paj-captain
 ```
 
 Configure `~/.pi/agent/captain.json` (or `PI_CODING_AGENT_DIR/captain.json`):
@@ -34,6 +34,24 @@ Run `/reload`, then `/captain`. Without workspace configuration, Captain can com
 existing main agents but cannot launch new ones. The current session must have a live main Paj
 identity. Captain retains its existing Pi model and thinking settings.
 
+### NixOS + Home Manager
+
+Add the GitHub flake input:
+
+```nix
+inputs.paj-captain.url = "github:jlodenius/paj-captain";
+```
+
+In your Home Manager module, with `inputs` available:
+
+```nix
+imports = [inputs.paj-captain.homeManagerModules.default];
+programs.paj-captain.enable = true;
+```
+
+The module installs the extension, skill, tmux, and util-linux. Install Pi and Paj separately.
+It leaves `captain.json` mutable and untouched, so Captain can save preferences normally.
+
 ## Use
 
 Ask Captain to find an agent, launch one in a workspace, delegate work, answer a worker's question,
@@ -53,8 +71,8 @@ may require attachment before the new agent becomes available through Paj.
 
 Workspace rules restrict launches, not communication with existing main agents elsewhere. `*`
 matches one directory level and `**` matches recursively; exclusions win. Use `path/**` to exclude
-an entire subtree. Permission is checked
-again at launch, including symlink resolution. This is tool-level policy, **not an OS sandbox**.
+an entire subtree. Permission is checked again at launch, including symlink resolution. This is
+tool-level policy, **not an OS sandbox**.
 
 Queued delivery is not proof that a worker started. Uncertain deliveries are retained without
 automatic retry. Reloading or navigating session history does not undo real launches or assignments.
@@ -68,8 +86,8 @@ Question overflow is flagged; completed results remain processable even after pr
 
 Captain reuses Paj discovery, messaging, and optional shared inspection. Inspection requires the
 updated Paj extension in both caller and target; older installations retain messaging-only status.
-Captain adds no voice dependencies, audio capture, public
-listeners, background daemon, or changes to paj.nvim. Independent `paj-voice` and phone voice
+Captain adds no voice dependencies, audio capture, public listeners, background daemon, or changes
+to paj.nvim. Independent `paj-voice` and phone voice
 through paj-rc are later projects.
 
 ## Development
