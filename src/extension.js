@@ -179,6 +179,10 @@ export function registerCaptain(pi, Type, options = {}) {
     if (names().includes(event.toolName) && !enabled) return { block: true, reason: 'Captain is disabled' };
     if (!enabled) return;
     if (CHILD_TOOLS.includes(event.toolName)) return { block: true, reason: 'Captain delegates to main agents; their subagents are their responsibility' };
+    if (event.toolName === 'inspect_agent') {
+      try { await client.resolveMain(event.input.recipient, identity(ctx)); }
+      catch (error) { return { block: true, reason: error.message }; }
+    }
     if (event.toolName === 'send_agent_message') {
       if (!event.input.kind || event.input.kind === 'request') {
         return { block: true, reason: 'Use captain_delegate for tracked main-agent assignments' };
@@ -211,6 +215,9 @@ export function registerCaptain(pi, Type, options = {}) {
     return { systemPrompt: `${event.systemPrompt}\n\nYou are Captain, this session's main-agent coordinator.\n`
       + `Read ${JSON.stringify(SKILL)} before coordinating work. Preserve user and repository instructions.\n`
       + 'Use Captain tools for launch, assignments, questions and settings. Coordinate MAIN agents, not their subagents.\n'
+      + (pi.getActiveTools().includes('inspect_agent')
+        ? 'For progress, consult tracked reports then use Paj inspect_agent on the main agent before asking a status question. Inspection is evidence, not completion.\n'
+        : 'Live inspection is unavailable in this tool set. Use tracked reports; ask a worker only when necessary and report missing evidence honestly.\n')
       + 'Act on clear user requests; clarify ambiguous targets or material scope. Preserve actual constraints without inventing new ones.\n'
       + 'Launch checks are mandatory tool policy, not a sandbox. Use captain_start_agent rather than bypassing checks through the shell.\n'
       + `Reporting preferences: ${JSON.stringify(config.reporting)}. Report questions, blockers and final results at the selected verbosity; `

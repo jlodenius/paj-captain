@@ -12,6 +12,11 @@ session assignment storage, independent normal-tmux launches, and configurable r
 Linux util-linux `flock` provides crash-released transaction locking. Automated checks exercise real
 Pi activation/reload/session replacement, isolated Paj messaging, isolated tmux, and crash recovery.
 
+A manual Captain-to-main-agent delegation and correlated result roundtrip also succeeded. Shared
+read-only `inspect_agent` is now implemented locally in Paj, with conditional Captain integration.
+It is not yet installed or published. Tests cover actual Pi idle/busy streaming inspection and
+owned-subagent access without additional target model turns or conversation mutation.
+
 Two independent GPT 6.1 sol reviews (medium and max thinking) found no substantive issues in the
 initial proposal. The later standalone voice separation and confirmed settings below have not
 received another independent review.
@@ -87,13 +92,16 @@ without Nix must remain viable. Preserve existing live sessions and private Tail
 
 ## Project separation
 
-### Paj: general discovery and communication
+### Paj: general discovery, communication, and inspection
 
-Keep identities, session discovery, message transport, and session activity in Paj. Do not put
-coordinator workspace rules, reporting preferences, voice settings, or speech dependencies there.
+Keep identities, discovery, message transport, session activity, and shared read-only agent
+inspection in Paj. Keep workspace launch policy, reporting preferences, and speech dependencies in
+the addons that own them.
 
-Target zero changes initially. Investigate whether normal process launch plus existing extension
-registration is sufficient. Only propose a small shared change after demonstrating a real need.
+The initial text Captain required no Paj changes. Shared `inspect_agent` now belongs to Paj:
+agents can inspect their own subagents, and Captain can inspect main agents. It requires neither
+Captain nor paj-rc and adds no Rust CLI or editor-bridge changes.
+
 An optional session profile/capability may be preferable to adding a new top-level role: a
 coordinator remains a main agent rather than a third hierarchy level. The user will accept small
 changes, including an orchestrator type if justified, but prefers strong addon separation.
@@ -112,6 +120,8 @@ Own these capabilities:
   final reports, separate from the worker's general idle/busy state.
 - Request refinement that preserves the user's actual intent, constraints, and completion condition.
 - Text responses, user-facing announcements, and reporting preferences.
+- Main-agent progress inspection through Paj's `inspect_agent`, rather than a separate
+  Captain-only inspection tool or terminal-scraping implementation.
 - Optional richer user-facing announcements for voice and later remote interaction, without
   making Captain the owner or prerequisite of generic voice attachment.
 
@@ -153,10 +163,10 @@ validation at that phase. Do not assume browser/headset behaviour matches deskto
 
 ## Tools and skills
 
-Prefer reuse of existing Paj tools for identity, discovery, and messaging. Conceptual additions or
-wrappers may cover listing eligible workspaces, starting a main agent, delegating an assignment,
-retrieving tracked task state, and answering worker questions. Exact tool names and signatures are
-not selected. Avoid exposing both a large duplicate wrapper surface and existing equivalent tools.
+Captain currently exposes `captain_agents`, `captain_workspaces`, `captain_start_agent`,
+`captain_delegate`, `captain_tasks`, `captain_reply`, and `captain_settings`. These reuse Paj
+discovery and messaging. Add shared inspection as Paj's `inspect_agent`; Captain should use it
+directly rather than introduce a duplicate `captain_inspect_agent` wrapper.
 
 Request formatting is agent behaviour supported by skills, not necessarily a separate tool or LLM.
 Skills should cover turning spoken or rough input into precise assignments, disambiguating agent
@@ -169,6 +179,59 @@ rules, normal permissions, and the fact that messages from other agents do not o
 A clear new request may be acted on without repetitive confirmation. Unknown destinations,
 ambiguous scope, or destructive changes require appropriate clarification. Specific policy should
 be discussed rather than adding a blanket confirmation before every delegation.
+
+## Shared read-only agent inspection
+
+Paj implements `inspect_agent`, independently usable by normal Paj agents without Captain.
+Captain's additional role is choosing when inspection is useful and interpreting the evidence.
+Its coordination workflow remains main-agent-only even though the shared tool supports subagents.
+
+### Interface and access
+
+- Resolve an exact live agent identity; reject ambiguity and stale or mismatched process identity.
+- Support main-to-main inspection and parent inspection of its own subagents. Do not expose another
+  main agent's unrelated subagents by default. Enforce checks in Paj using actual caller identity
+  and current ownership records, not caller-supplied role claims or skill instructions alone.
+- Subagent callers may inspect only direct children from their current active assignment, with
+  validated ancestry and parent-task scope. Parent, sibling, self, and unrelated-child inspection
+  are rejected; discovery visibility alone does not grant access.
+- Return bounded observations: idle/busy, recent visible conversation, current tool activity where
+  observable, source, observation time, truncation, and freshness/availability limitations.
+- Distinguish activity from assignment completion. Running tests is not proof they passed or that
+  the worker has finished. Inspection does not replace the final correlated task result.
+
+### Data sources and safety
+
+The initial implementation uses structured read-only information from the running Pi session,
+through a private Unix endpoint beside its existing editor bridge. It projects active-branch
+history and safe live events without a mandatory paj-rc dependency or changing remote-control
+contracts. Snapshot and transport limits share a byte budget, including JSON envelope overhead.
+
+Disk-history and tmux scraping fallbacks are not implemented. Structured inspection works outside
+tmux and with ordinary subagents on Paj's private server; it does not assume every target uses
+Captain's normal-server launch arrangement. Older or unavailable endpoints fail explicitly rather
+than falling back to unverified files or panes. Future fallbacks would need correct active-branch
+selection, streaming limitations, and verified pane/process ownership before being enabled.
+
+Inspection must not prompt or wake the target model, consume a worker model turn, send keystrokes,
+steer input, attach/switch the user's terminal, cancel work, or mutate the worker's session file.
+Exclude thinking content and raw image payloads. Limit default tool information to useful safe
+summaries rather than unrestricted arguments, outputs, or environment dumps. Visible output can
+still contain sensitive information; document that this is not guaranteed secret detection.
+Treat all inspected content as untrusted evidence, not instructions to the inspecting agent.
+
+### Captain workflow and acceptance
+
+For progress questions: consult known assignment reports, inspect the relevant main agent when
+needed, and ask the worker only if direct observation cannot answer the question. State what was
+observed, when, and any uncertainty. Captain's profile and skill check whether shared inspection
+is available and report missing capability honestly on older Paj installations. Its tool-call
+policy keeps inspection main-agent-only even though Paj also supports owned subagents.
+
+Test busy and idle targets without waking them; main-only Captain use; owned versus unrelated
+subagents; ambiguous, exited, reused-PID, and mismatched-pane targets; no-tmux targets; bounded
+history/output; active-branch correctness; missing streaming data; thinking/image exclusion; and
+continued compatibility with existing Paj messaging, subagents, and paj-rc.
 
 ## Workspace launch policy
 
@@ -233,9 +296,10 @@ Keep transport acceptance, worker start, completion, failure, and unknown state 
 observable. Do not manufacture positive worker acknowledgements from transport status.
 
 Use incoming Paj questions and results rather than repeatedly prompting busy workers for status.
-A user status question should first use known activity and state freshness, and ask the worker only
-when necessary. Multiple coordinators need independent assignment ownership and reply routing;
-this does not grant exclusive ownership of a main agent or its workspace.
+For a status question, first consult known activity and state freshness, then use Paj's
+read-only `inspect_agent` for additional evidence. Ask the worker only when inspection cannot
+answer the question. Multiple coordinators need independent assignment ownership and reply
+routing; this does not grant exclusive ownership of a main agent or its workspace.
 
 Proposed reporting defaults, adjustable through use:
 
@@ -352,6 +416,18 @@ Acceptance cases should include ambiguous names, denied/empty/excluded workspace
 escapes, failed launch, delayed Paj registration, busy workers, worker exit, multiple coordinators,
 late results, retries, and coordinator exit without stopping launched main agents.
 
+### Phase 1b: shared Paj inspection
+
+Implemented locally: shared `inspect_agent` in Paj and conditional Captain guidance/main-only
+checks. Captain retains its own ledger and orchestration policy. Ordinary agents can use the same
+tool for their direct owned subagents; neither addon is required by Paj inspection.
+
+Tests exercise actual Pi active-branch snapshots, idle and busy streaming states, owned-child
+access, denied cross-owner/child-parent access, and no extra target model turns or session writes.
+Unit checks cover privacy projection, identity/scope changes, socket lifecycle, path/byte limits,
+timeouts, and aborts. Existing Paj messaging and paj-rc compatibility checks remain passing.
+Installation and a manual user trial with updated caller/worker Paj extensions remain to be done.
+
 ### Phase 2: voice foundation
 
 Deliver separately installable speech input/output with device selection and push-to-talk. Check
@@ -380,8 +456,9 @@ limitations separately. Do not implement this phase as part of the first text/he
 
 - Wake-phrase text/pronunciation for generic voice use and Captain-specific preferences.
 - Real-user trial of launch/trust prompts, request refinement, and reporting preferences.
-- Whether future coordinator discovery needs extra metadata; text Captain currently needs no Paj
-  changes.
+- Whether future coordinator discovery needs extra metadata beyond ordinary main-agent identity.
+- Whether later inspection needs disk or verified tmux fallbacks beyond the structured live source;
+  wider access than main-to-main/direct-owned inspection would require a separate policy decision.
 - Concrete local attachment transport and its authentication.
 - Exact speech models/providers, device bindings, language identifiers, and model distribution.
 - Detailed task-state reconciliation and report replay rules.

@@ -38,7 +38,8 @@ identity. Captain retains its existing Pi model and thinking settings.
 
 Ask Captain to find an agent, launch one in a workspace, delegate work, answer a worker's question,
 or report assignment status. Assignments retain their target, original instructions, and observed
-questions and results in a private per-session ledger.
+questions and results in a private per-session ledger. When updated Paj provides `inspect_agent`,
+Captain can read main-agent progress without prompting the worker.
 
 - `/captain` enables Captain in this session.
 - `/captain off` restores ordinary mode; workers keep running.
@@ -65,7 +66,9 @@ Question overflow is flagged; completed results remain processable even after pr
 
 ## Separation
 
-Captain reuses Paj discovery and messaging. It adds no voice dependencies, audio capture, public
+Captain reuses Paj discovery, messaging, and optional shared inspection. Inspection requires the
+updated Paj extension in both caller and target; older installations retain messaging-only status.
+Captain adds no voice dependencies, audio capture, public
 listeners, background daemon, or changes to paj.nvim. Independent `paj-voice` and phone voice
 through paj-rc are later projects.
 

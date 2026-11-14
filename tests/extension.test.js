@@ -108,6 +108,25 @@ test('subagent tools and untracked requests are blocked while main-only question
   assert.equal((await f.event('tool_call', { toolName: 'send_agent_message', input: { recipient: 'child', kind: 'question' } })).block, true);
 });
 
+test('shared Paj inspection is preferred when available and Captain restricts it to main agents', async t => {
+  const f = fixture(t);
+  f.pi.setActiveTools([...f.pi.getActiveTools(), 'inspect_agent']);
+  await f.command('');
+  const prompt = await f.event('before_agent_start', { systemPrompt: 'Original' });
+  assert.match(prompt.systemPrompt, /use Paj inspect_agent/);
+  assert.equal(await f.event('tool_call', { toolName: 'inspect_agent', input: { recipient: worker.id } }), undefined);
+  assert.equal((await f.event('tool_call', { toolName: 'inspect_agent', input: { recipient: 'child' } })).block, true);
+  await f.command('off');
+  assert.equal(await f.event('tool_call', { toolName: 'inspect_agent', input: { recipient: 'child' } }), undefined);
+});
+
+test('missing shared inspection is explicit rather than assumed to provide live access', async t => {
+  const f = fixture(t);
+  await f.command('');
+  const prompt = await f.event('before_agent_start', { systemPrompt: 'Original' });
+  assert.match(prompt.systemPrompt, /Live inspection is unavailable/);
+});
+
 test('delegation persists a queued task, accepts a worker outside launch roots and does not resend', async t => {
   const f = fixture(t);
   await f.command('');
