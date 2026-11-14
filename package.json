@@ -1,0 +1,17 @@
+{
+  "name": "paj-captain",
+  "version": "0.1.0",
+  "description": "Text-first coordination of main Paj agents inside Pi",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=24" },
+  "keywords": ["pi-package", "paj"],
+  "files": ["extensions", "src", "skills", "examples", "README.md", "plan.md", "LICENSE"],
+  "scripts": { "test": "node --test tests/*.test.js" },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "typebox": "*" },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": { "optional": true },
+    "typebox": { "optional": true }
+  },
+  "pi": { "extensions": ["extensions"], "skills": ["skills"] }
+}

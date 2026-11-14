@@ -1,0 +1,183 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, existsSync, statSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { registerCaptain } from '../src/extension.js';
+import { saveConfig, captainPaths, loadConfig } from '../src/config.js';
+
+const Type = Object.fromEntries(['Object', 'String', 'Optional', 'Array', 'Boolean']
+  .map(name => [name, value => ({ type: name, value })]));
+const ownPiId = '20000000-0000-4000-8000-000000000001';
+const self = { id: '10000000-0000-4000-8000-000000000001', piSessionId: ownPiId,
+  name: 'captain', role: 'primary', parentPiSessionId: null, projectRoot: '/projects/captain',
+  cwd: '/projects/captain', projectId: 'captain-project', pid: 123, status: 'idle' };
+const worker = { ...self, id: '10000000-0000-4000-8000-000000000002',
+  piSessionId: '20000000-0000-4000-8000-000000000002', name: 'worker', projectRoot: '/elsewhere', cwd: '/elsewhere' };
+
+function fixture(t, overrides = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'captain-extension-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const paths = captainPaths({ PI_CODING_AGENT_DIR: root });
+  const messages = [];
+  const calls = [];
+  const entries = [];
+  const notices = [];
+  const handlers = new Map();
+  const tools = new Map();
+  const commands = new Map();
+  let active = ['read', 'bash', 'send_agent_message', 'spawn_sub_agent'];
+  const client = {
+    self: async id => { calls.push(['self', id]); return self; },
+    listMain: async () => [worker],
+    resolveMain: async name => { if (name !== worker.id && name !== worker.name) throw new Error('Not a live main agent'); return worker; },
+    incoming: async () => messages,
+    send: async args => { calls.push(['send', args]); return { id: '30000000-0000-4000-8000-000000000001',
+      from: { id: self.id, name: self.name }, to: args.recipient, text: args.text, kind: args.kind,
+      taskId: args.taskId, inReplyTo: args.inReplyTo, createdAtMs: Date.now() }; },
+    ...overrides.client,
+  };
+  const pi = {
+    registerTool: tool => { tools.set(tool.name, tool); if (tool.exposure === 'direct') active = [...new Set([...active, tool.name])]; },
+    getActiveTools: () => active,
+    setActiveTools: names => { active = names; },
+    registerCommand: (name, command) => commands.set(name, command),
+    appendEntry: (customType, data) => entries.push({ type: 'custom', customType, data }),
+    on: (event, handler) => { handlers.set(event, handler); },
+  };
+  const ctx = { cwd: root, sessionManager: { getSessionId: () => ownPiId, getBranch: () => entries },
+    ui: { setStatus() {}, notify: (...args) => notices.push(args) }, waitForIdle: async () => {} };
+  registerCaptain(pi, Type, { ...overrides, paths, client });
+  return { root, paths, client, calls, entries, notices, handlers, tools, pi, ctx,
+    command: args => commands.get('captain').handler(args, ctx),
+    tool: (name, params = {}, id = 'tool-call') => tools.get(name).execute(id, params, undefined, undefined, ctx),
+    event: (name, event = {}) => handlers.get(name)(event, ctx) };
+}
+
+test('ordinary sessions stay dormant and disabled tools cannot execute', async t => {
+  const f = fixture(t);
+  await f.event('session_start');
+  assert.equal(f.calls.length, 0);
+  assert.equal(existsSync(f.paths.stateDir), false);
+  assert.ok([...f.tools.values()].every(tool => tool.exposure === 'hidden'));
+  assert.equal(await f.event('before_agent_start', { systemPrompt: 'Original' }), undefined);
+  await assert.rejects(f.tool('captain_agents'), /Run \/captain/);
+});
+
+test('/captain activates only this session and preserves the existing system prompt', async t => {
+  const f = fixture(t);
+  await f.command('');
+  assert.ok(f.pi.getActiveTools().includes('captain_delegate'));
+  assert.ok(!f.pi.getActiveTools().includes('spawn_sub_agent'));
+  assert.ok(f.pi.getActiveTools().includes('bash'));
+  const prompt = await f.event('before_agent_start', { systemPrompt: 'Original repository instructions' });
+  assert.ok(prompt.systemPrompt.startsWith('Original repository instructions\n'));
+  assert.match(prompt.systemPrompt, /MAIN agents/);
+  assert.match(prompt.systemPrompt, /keep routine progress quiet/);
+  assert.equal(f.entries.at(-1).data.enabled, true);
+  await f.command('off');
+  assert.ok(f.pi.getActiveTools().includes('spawn_sub_agent'));
+  assert.ok(!f.pi.getActiveTools().includes('captain_delegate'));
+  assert.equal(await f.event('before_agent_start', { systemPrompt: 'Original' }), undefined);
+});
+
+test('activation requires a live main Paj identity and reports failure without enabling', async t => {
+  const f = fixture(t, { client: { self: async () => { throw new Error('Paj is not available'); } } });
+  await f.command('');
+  assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
+  assert.equal(f.entries.length, 0);
+  assert.match(f.notices.at(-1)[0], /Paj is not available/);
+});
+
+test('Captain mode restores on reload and active-branch navigation can disable it', async t => {
+  const f = fixture(t);
+  await f.command('on');
+  await f.event('session_start');
+  assert.ok(f.pi.getActiveTools().includes('captain_agents'));
+  f.entries.length = 0;
+  await f.event('session_tree');
+  assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
+});
+
+test('subagent tools and untracked requests are blocked while main-only questions remain possible', async t => {
+  const f = fixture(t);
+  await f.command('');
+  assert.equal((await f.event('tool_call', { toolName: 'spawn_sub_agent', input: {} })).block, true);
+  assert.equal((await f.event('tool_call', { toolName: 'send_agent_message', input: { recipient: worker.id, kind: 'request' } })).block, true);
+  assert.equal(await f.event('tool_call', { toolName: 'send_agent_message', input: { recipient: worker.id, kind: 'question' } }), undefined);
+  assert.equal((await f.event('tool_call', { toolName: 'send_agent_message', input: { recipient: 'child', kind: 'question' } })).block, true);
+});
+
+test('delegation persists a queued task, accepts a worker outside launch roots and does not resend', async t => {
+  const f = fixture(t);
+  await f.command('');
+  const first = (await f.tool('captain_delegate', { recipient: worker.id, assignment: 'Review changes. Report checks.' })).details;
+  assert.equal(first.status, 'queued');
+  await f.tool('captain_delegate', { recipient: worker.id, assignment: 'Review changes. Report checks.' });
+  assert.equal(f.calls.filter(call => call[0] === 'send').length, 1);
+  const tasks = (await f.tool('captain_tasks')).details;
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].id, first.id);
+});
+
+test('unknown delivery remains visible and is never automatically resent', async t => {
+  const f = fixture(t, { client: { send: async args => { f.calls.push(['send', args]); throw new Error('Timeout after dispatch'); } } });
+  await f.command('');
+  const task = (await f.tool('captain_delegate', { recipient: worker.id, assignment: 'Finite task' })).details;
+  assert.equal(task.status, 'delivery_unknown');
+  await f.tool('captain_delegate', { recipient: worker.id, assignment: 'Finite task' });
+  assert.equal(f.calls.filter(call => call[0] === 'send').length, 1);
+});
+
+test('launch receives freshly read policy and stable request identity, and shutdown does not stop workers', async t => {
+  const launches = [];
+  const f = fixture(t, { launchMain: async (...args) => { launches.push(args); return { status: 'launched' }; } });
+  await f.command('');
+  saveConfig(f.paths.configFile, { workspaces: { allow: ['~/Development/**', '~/.nixos'] } });
+  await f.tool('captain_start_agent', { workspace: '~/.nixos' }, 'launch-id');
+  assert.deepEqual(launches[0][1].allow, ['~/Development/**', '~/.nixos']);
+  assert.equal(launches[0][0].requestId, `${ownPiId}:launch-id`);
+  await f.event('session_shutdown');
+  assert.equal(launches.length, 1);
+});
+
+test('settings persist explicit user preferences and are reflected in the next prompt', async t => {
+  const f = fixture(t);
+  await f.command('');
+  await f.tool('captain_settings', { allow: ['~/Development/**', '~/.nixos'], progress: true, verbosity: 'detailed' });
+  assert.equal(loadConfig(f.paths.configFile).reporting.progress, true);
+  const prompt = await f.event('before_agent_start', { systemPrompt: 'Original' });
+  assert.match(prompt.systemPrompt, /include useful progress/);
+  assert.match(prompt.systemPrompt, /detailed/);
+});
+
+test('aborting during target resolution prevents an unsubmitted delegation', async t => {
+  const controller = new AbortController();
+  const f = fixture(t, { client: { resolveMain: async () => { controller.abort(); return worker; } } });
+  await f.command('');
+  await assert.rejects(f.tools.get('captain_delegate').execute('cancelled',
+    { recipient: worker.id, assignment: 'Must not dispatch' }, controller.signal, undefined, f.ctx));
+  assert.equal(f.calls.filter(call => call[0] === 'send').length, 0);
+});
+
+test('malformed live configuration keeps a protective Captain prompt and blocks delegation', async t => {
+  const f = fixture(t);
+  await f.command('');
+  writeFileSync(f.paths.configFile, '{');
+  const prompt = await f.event('before_agent_start', { systemPrompt: 'Original' });
+  assert.match(prompt.systemPrompt, /configuration is invalid/);
+  await assert.rejects(f.tool('captain_delegate', { recipient: worker.id, assignment: 'Do not dispatch' }));
+  assert.equal(f.calls.filter(call => call[0] === 'send').length, 0);
+});
+
+test('large tool output is bounded and the complete private result remains readable', async t => {
+  const large = Array.from({ length: 100 }, (_, index) => ({ ...worker, name: `${index}-${'x'.repeat(1000)}` }));
+  const f = fixture(t, { client: { listMain: async () => large } });
+  await f.command('');
+  const output = await f.tool('captain_agents');
+  assert.equal(output.details.truncated, true);
+  t.after(() => rmSync(dirname(output.details.fullOutputPath), { recursive: true, force: true }));
+  assert.ok(Buffer.byteLength(output.content[0].text) < 32768);
+  assert.equal(statSync(output.details.fullOutputPath).mode & 0o777, 0o600);
+  assert.deepEqual(JSON.parse(readFileSync(output.details.fullOutputPath, 'utf8')), large);
+});
