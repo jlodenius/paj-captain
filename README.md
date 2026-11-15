@@ -1,20 +1,48 @@
 # paj-captain
 
-Text-first coordination of main [Paj](https://github.com/jlodenius/paj) agents inside Pi.
-Enable Captain in an existing session with `/captain`; ordinary sessions stay unchanged.
+`paj-captain` orchestrates main [Paj](https://github.com/jlodenius/paj) agents inside
+[Pi](https://github.com/earendil-works/pi). Enable it in an existing session with `/captain`.
 
-## Installation
+## Install
 
-Requires Pi 1.5.2 or newer, Paj, Node.js 24 or newer, tmux, and `flock` (util-linux) on Linux.
-Tested with tmux 3.7c.
+Requires Linux, Pi 1.5.2 or newer, Paj, Node.js 24 or newer, tmux, and `flock`
+(the file-locking command from util-linux).
 
-Install Paj first, then add the Pi package:
+Install [Paj](https://github.com/jlodenius/paj#install) first, then the Pi package:
 
 ```sh
 pi install git:github.com/jlodenius/paj-captain
 ```
 
-Configure `~/.pi/agent/captain.json` (or `PI_CODING_AGENT_DIR/captain.json`):
+### NixOS
+
+For NixOS with Home Manager, add the GitHub flake input:
+
+```nix
+inputs.paj-captain.url = "github:jlodenius/paj-captain";
+```
+
+In your Home Manager user configuration, with `inputs` available in the module scope:
+
+```nix
+imports = [inputs.paj-captain.homeManagerModules.default];
+programs.paj-captain.enable = true;
+```
+
+The module installs the extension, skill, tmux, and util-linux. Install Pi and Paj separately.
+Rebuild NixOS and skip `pi install`; Home Manager loads the extension and skill.
+
+## Model defaults
+
+Captain keeps your current Pi model and thinking level. New workers use Pi's startup defaults
+unless you supply a model.
+
+Use GPT/Codex for now; Claude bridge has a known
+[instruction-delivery limitation](docs/research/captain-model-compatibility.md).
+
+## Setup
+
+Create `~/.pi/agent/captain.json` (or `captain.json` under `PI_CODING_AGENT_DIR`):
 
 ```json
 {
@@ -30,87 +58,34 @@ Configure `~/.pi/agent/captain.json` (or `PI_CODING_AGENT_DIR/captain.json`):
 }
 ```
 
-Run `/reload`, then `/captain`. Without workspace configuration, Captain can communicate with
-existing main agents but cannot launch new ones. The current session must have a live main Paj
-identity. Captain retains its existing Pi model and thinking settings.
+Adjust the workspace paths to your projects. Without an allowlist, Captain can message existing
+agents but cannot launch new ones. Ask Captain to change preferences, or edit this file directly.
 
-### NixOS + Home Manager
+Run `/reload`, then `/captain`. Restart Pi instead if you upgraded Pi itself.
 
-Add the GitHub flake input:
+## Usage
 
-```nix
-inputs.paj-captain.url = "github:jlodenius/paj-captain";
-```
+Ask Captain to find or launch agents, delegate work, inspect progress, and report results.
+Workers run independently in normal tmux sessions and keep running when Captain exits.
 
-In your Home Manager module, with `inputs` available:
+Use `/captain status`, `/captain settings`, and `/captain tasks` to inspect state.
+`/captain off` restores ordinary mode without stopping workers.
 
-```nix
-imports = [inputs.paj-captain.homeManagerModules.default];
-programs.paj-captain.enable = true;
-```
+Workspace rules restrict launches, not communication. These are tool-level checks, not an OS
+sandbox. Queued work is not proof of execution; uncertain actions are not automatically repeated.
 
-The module installs the extension, skill, tmux, and util-linux. Install Pi and Paj separately.
-It leaves `captain.json` mutable and untouched, so Captain can save preferences normally.
+## Reference
 
-## Use
-
-Ask Captain to find an agent, launch one in a workspace, delegate work, answer a worker's question,
-or report assignment status. Assignments retain their target, original instructions, and observed
-questions and results in a private per-session ledger. When updated Paj provides `inspect_agent`,
-Captain can read main-agent progress without prompting the worker.
-
-- `/captain` enables Captain in this session.
-- `/captain off` restores ordinary mode; workers keep running.
-- `/captain status`, `/captain settings`, and `/captain tasks` inspect state.
-- Ask Captain to change workspace or reporting options explicitly, or edit the config file.
-
-New main agents use existing directories in separate sessions on the **normal tmux default server**,
-visible with `tmux list-sessions`. Launch results include an attachment command. They are not owned
-subagents, use no private Paj server, and survive Captain exiting. A startup or project-trust prompt
-may require attachment before the new agent becomes available through Paj.
-
-Workspace rules restrict launches, not communication with existing main agents elsewhere. `*`
-matches one directory level and `**` matches recursively; exclusions win. Use `path/**` to exclude
-an entire subtree. Permission is checked again at launch, including symlink resolution. This is
-tool-level policy, **not an OS sandbox**.
-
-Queued delivery is not proof that a worker started. Uncertain deliveries are retained without
-automatic retry. Reloading or navigating session history does not undo real launches or assignments.
-The ledger preserves last-known state; it is not a guarantee that Paj can deliver replies to an
-identity that has disappeared. No worker is stopped automatically.
-
-Storage is bounded to 128 assignments per Captain session and 64 retained questions per assignment.
-Question overflow is flagged; completed results remain processable even after progress saturation.
-
-## Compaction
-
-While Captain is enabled, manual and automatic compaction reuse Pi's summarizer with additional
-[reviewed guidance](src/compaction-guidance.md). It prioritizes user decisions, approval gates,
-continuation-relevant task references, and uncertainty. The same focus reaches split-turn summaries;
-there is no separate checkpoint database or extra rewrite pass. The durable ledger remains separate.
-
-Cancelled, empty, or failed summaries are not saved or retried without guidance. Virtual routing
-models are currently unsupported: select a physical model, or turn Captain off before compacting.
-Summaries remain lossy; guidance is not a guarantee that every detail survives.
-
-See [compaction integration](docs/compaction.md) for compatibility limits and failure behavior.
-
-## Separation
-
-Captain reuses Paj discovery, messaging, and optional shared inspection. Inspection requires the
-updated Paj extension in both caller and target; older installations retain messaging-only status.
-Captain adds no voice dependencies, audio capture, public listeners, background daemon, or changes
-to paj.nvim. Independent `paj-voice` and phone voice through paj-rc are later projects.
+- [Captain workflow](skills/paj-captain/SKILL.md)
+- [Compaction guidance and compatibility](docs/compaction.md)
+- [Design and delivery plan](plan.md)
 
 ## Development
 
 ```sh
 npm test
-PAJ_CAPTAIN_PI_BIN=$(command -v pi) PAJ_CAPTAIN_PAJ_BIN=$(command -v paj) npm test
+PI_OFFLINE=1 PAJ_CAPTAIN_PI_BIN=$(command -v pi) PAJ_CAPTAIN_PAJ_BIN=$(command -v paj) npm test
 ```
 
-The real-Pi checks expect a sibling Paj checkout; set `PAJ_CAPTAIN_PAJ_EXTENSION` to its extension
-path otherwise. Tests use temporary storage and injected adapters or isolated processes, never your
-live registry or normal tmux server. Nothing is installed by building or testing this package.
-
-See [plan.md](plan.md) for the agreed Captain/Voice separation and delivery plan.
+Integration tests use isolated state and local fake model providers. They expect a sibling Paj
+checkout; set `PAJ_CAPTAIN_PAJ_EXTENSION` to its extension path otherwise.
