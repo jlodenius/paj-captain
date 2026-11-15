@@ -9,7 +9,9 @@ import { CAPTAIN_COMPACTION_GUIDANCE, carryCaptainFiles, compactCaptain } from '
 async function installedCompact() {
   const require = createRequire(import.meta.url);
   const candidates = [];
-  try { candidates.push(require.resolve('@earendil-works/pi-coding-agent')); } catch {}
+  if (!process.env.PAJ_CAPTAIN_PI_BIN) {
+    try { candidates.push(require.resolve('@earendil-works/pi-coding-agent')); } catch {}
+  }
   const binaries = process.env.PAJ_CAPTAIN_PI_BIN ? [process.env.PAJ_CAPTAIN_PI_BIN]
     : (process.env.PATH ?? '').split(':').map(path => join(path, 'pi'));
   for (const binary of binaries) {
@@ -21,13 +23,26 @@ async function installedCompact() {
       candidates.push(join(match[1], 'lib/node_modules/pi-monorepo/dist/index.js'));
     }
   }
+  let unsupported;
   for (const candidate of candidates) {
-    if (existsSync(candidate)) return (await import(pathToFileURL(candidate).href)).compact;
+    if (!existsSync(candidate)) continue;
+    const sdk = await import(pathToFileURL(candidate).href);
+    const version = /^(\d+)\.(\d+)\.(\d+)$/.exec(sdk.VERSION ?? '')?.slice(1).map(Number);
+    if (version && (version[0] > 1 || (version[0] === 1
+      && (version[1] > 5 || (version[1] === 5 && version[2] >= 2))))) {
+      assert.equal(typeof sdk.compact, 'function');
+      return { compact: sdk.compact, version: sdk.VERSION };
+    }
+    unsupported = `Installed Pi SDK ${sdk.VERSION ?? 'unknown'} is below required 1.5.2`;
   }
+  assert.ok(!process.env.PAJ_CAPTAIN_PI_BIN,
+    unsupported ?? `No Pi SDK found for explicit PAJ_CAPTAIN_PI_BIN=${process.env.PAJ_CAPTAIN_PI_BIN}`);
+  return { skip: unsupported ?? 'Installed Pi SDK >=1.5.2 not found' };
 }
 
-const realCompact = await installedCompact();
-const realOptions = { skip: !realCompact && 'Installed Pi SDK not found' };
+const installed = await installedCompact();
+const realCompact = installed.compact;
+const realOptions = { skip: !realCompact && installed.skip };
 const model = { provider: 'test-provider', id: 'test-model', api: 'test-api', maxTokens: 4096, reasoning: true };
 
 function usage(input = 10, output = 5) {
@@ -88,6 +103,10 @@ test('real helper preserves boundaries, usage, settings and input while applying
   const result = await run(f, { thinkingLevel: 'high' });
   assert.equal(f.calls.length, 1);
   const call = f.calls[0];
+  assert.deepEqual(call.context.messages.map(message => message.role), ['system', 'user']);
+  assert.equal(call.context.systemPrompt, undefined);
+  assert.equal(occurrences(JSON.stringify(call.context.messages[1]), 'MANUAL_FOCUS'), 1);
+  assert.equal(occurrences(JSON.stringify(call.context.messages[0]), 'MANUAL_FOCUS'), 0);
   const prompt = JSON.stringify(call.context);
   assert.equal(occurrences(prompt, JSON.stringify(CAPTAIN_COMPACTION_GUIDANCE).slice(1, -1)), 1);
   assert.equal(occurrences(prompt, 'MANUAL_FOCUS'), 1);
@@ -95,7 +114,7 @@ test('real helper preserves boundaries, usage, settings and input while applying
   assert.equal(call.model, model);
   assert.equal(call.options.signal, f.event.signal);
   assert.equal(call.options.reasoning, 'high');
-  assert.equal(call.options.maxTokens, 800);
+  assert.equal(call.options.maxTokens, undefined);
   assert.equal(call.options.cacheRetention, 'none');
   assert.ok(call.options.sessionId);
   assert.equal(result.compaction.firstKeptEntryId, prep.firstKeptEntryId);
@@ -120,12 +139,16 @@ for (const withHistory of [false, true]) {
     const result = await run(f);
     assert.equal(f.calls.length, withHistory ? 2 : 1);
     for (const call of f.calls) {
+      assert.deepEqual(call.context.messages.map(message => message.role), ['system', 'user']);
+      assert.equal(call.context.systemPrompt, undefined);
+      assert.equal(occurrences(JSON.stringify(call.context.messages[1]), 'MANUAL_FOCUS'), 1);
+      assert.equal(occurrences(JSON.stringify(call.context.messages[0]), 'MANUAL_FOCUS'), 0);
       const prompt = JSON.stringify(call.context);
       assert.equal(occurrences(prompt, JSON.stringify(CAPTAIN_COMPACTION_GUIDANCE).slice(1, -1)), 1);
       assert.equal(occurrences(prompt, 'MANUAL_FOCUS'), 1);
       assert.equal(call.options.cacheRetention, 'none');
     }
-    assert.equal(f.calls.at(-1).options.maxTokens, 500);
+    assert.equal(f.calls.at(-1).options.maxTokens, undefined);
     assert.ok(JSON.stringify(f.calls.at(-1).context).includes('SPLIT_PREFIX'));
     assert.equal(result.compaction.usage.input, withHistory ? 30 : 20);
     assert.equal(result.compaction.usage.output, withHistory ? 12 : 7);
@@ -326,7 +349,7 @@ test('physical provider adapter preserves public request settings and leaves aut
   }
 });
 
-test('helper receives unchanged prepared inputs, nullish retry defaults and no separate custom focus', async () => {
+test('helper receives unchanged prepared inputs, nullish retry defaults and combined native focus', async () => {
   const f = fixture({ customInstructions: 'manual' });
   const received = [];
   const result = await run(f, { thinkingLevel: 'off',
@@ -340,7 +363,8 @@ test('helper receives unchanged prepared inputs, nullish retry defaults and no s
   const args = received[0];
   assert.equal(args[0], f.event.preparation);
   assert.equal(args[1], model);
-  assert.deepEqual(args.slice(2, 5), [undefined, undefined, undefined]);
+  assert.deepEqual(args.slice(2, 4), [undefined, undefined]);
+  assert.equal(args[4], `${CAPTAIN_COMPACTION_GUIDANCE}\n\nUser-supplied compaction focus:\nmanual`);
   assert.equal(args[5], f.event.signal);
   assert.equal(args[6], 'off');
   assert.equal(typeof args[7], 'function');
@@ -356,10 +380,10 @@ test('reject invalid helper results rather than persist changed retention or tok
   }
 });
 
-test('real helper caps output to model limits and omits unsupported reasoning', realOptions, async () => {
+test('real helper delegates output budgeting to the provider and omits unsupported reasoning', realOptions, async () => {
   const f = fixture({ selectedModel: { ...model, maxTokens: 100, reasoning: false } });
   assert.ok((await run(f, { thinkingLevel: 'high' })).compaction);
-  assert.equal(f.calls[0].options.maxTokens, 100);
+  assert.equal(f.calls[0].options.maxTokens, undefined);
   assert.equal(f.calls[0].options.reasoning, undefined);
 });
 
@@ -394,29 +418,32 @@ test('helper retry policy fills absent public settings with Pi defaults', async 
   assert.deepEqual(policy, { enabled: true, maxRetries: 3, baseDelayMs: 2000, maxAgentDelayMs: 60000 });
 });
 
-test('unsupported summary request shape fails closed before reaching the provider', async () => {
-  for (const messages of [[], [{ role: 'assistant', content: [] }]]) {
-    const f = fixture();
-    const compact = async (_prep, selected, _key, _headers, _focus, signal, _thinking, stream) => {
-      await stream(selected, { messages }, { signal });
-      throw new Error('must not reach here');
+test('registry adapter forwards helper contexts by identity without injecting focus or mutating messages', async () => {
+  for (const content of ['Original prompt', [{ type: 'text', text: 'Original prompt' }]]) {
+    const f = fixture({ customInstructions: 'manual' });
+    const context = { messages: [
+      { role: 'system', content: 'Original system prompt', timestamp: 0 },
+      { role: 'user', content, timestamp: 0 },
+    ] };
+    const before = structuredClone(context);
+    const compact = async (prep, selected, key, headers, instructions, signal, thinking, stream) => {
+      assert.equal(instructions, `${CAPTAIN_COMPACTION_GUIDANCE}\n\nUser-supplied compaction focus:\nmanual`);
+      await stream(selected, context, { signal });
+      return { summary: 'summary', firstKeptEntryId: prep.firstKeptEntryId, tokensBefore: prep.tokensBefore };
     };
-    assert.deepEqual(await run(f, { compact }), { cancel: true });
-    assert.equal(f.calls.length, 0);
-    assert.match(f.notices[0].message, /Unsupported Pi summarization context/);
+    assert.ok((await run(f, { compact })).compaction);
+    assert.equal(f.calls[0].context, context);
+    assert.equal(f.calls[0].context.messages, context.messages);
+    assert.deepEqual(context, before);
+    assert.equal(occurrences(JSON.stringify(context), CAPTAIN_COMPACTION_GUIDANCE), 0);
   }
 });
 
-test('focus adapter supports string content without mutating the public summary context', async () => {
-  const f = fixture({ customInstructions: 'manual' });
-  const context = { messages: [{ role: 'user', content: 'Original prompt', timestamp: 0 }] };
-  const before = structuredClone(context);
-  const compact = async (prep, selected, key, headers, instructions, signal, thinking, stream) => {
-    await stream(selected, context, { signal });
+test('helper receives reviewed native focus when no manual focus is supplied', async () => {
+  const f = fixture();
+  const compact = async (prep, selected, key, headers, instructions) => {
+    assert.equal(instructions, CAPTAIN_COMPACTION_GUIDANCE);
     return { summary: 'summary', firstKeptEntryId: prep.firstKeptEntryId, tokensBefore: prep.tokensBefore };
   };
   assert.ok((await run(f, { compact })).compaction);
-  assert.deepEqual(context, before);
-  assert.ok(f.calls[0].context.messages[0].content.startsWith('Original prompt'));
-  assert.equal(occurrences(f.calls[0].context.messages[0].content, CAPTAIN_COMPACTION_GUIDANCE), 1);
 });

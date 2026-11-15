@@ -10,17 +10,19 @@ supersession semantics before the hook was implemented.
    operations, and retained-message boundary.
 2. When Captain is enabled, its `session_before_compact` handler calls Pi's exported `compact()`.
    It uses the supplied preparation rather than rebuilding raw history or choosing a new boundary.
-3. A stream adapter appends Captain guidance and any manual compaction instructions to each
-   summarization request before sending it through `ctx.modelRegistry.streamSimple()`.
+3. Captain passes its guidance and any manual compaction instructions through the helper's native
+   extra-instructions argument. Pi adds them to both history and split-prefix summary requests.
+   The stream adapter forwards Pi's context unchanged through `ctx.modelRegistry.streamSimple()`.
 4. Pi's helper generates the summary and file lists. Captain preserves the returned usage, token
    count, and retained boundary, adding only a versioned marker to the details.
 5. Pi persists the result and rebuilds context normally. No assignments, replies, launches, or
    messages are submitted by the compaction hook.
 
-Pi 1.2.0 forwards its `customInstructions` argument to history summarization but not split-prefix
-summarization. Adding focus at the stream boundary covers both without matching private prompt
-strings or making an additional rewrite request. Ordinary compaction usually makes one summary
-request; a split turn can require two, and configured transient-error retries can make more.
+Pi 1.5.2 natively forwards extra instructions to both summary types, so Captain does not rewrite
+request content or perform an additional summary pass. Ordinary compaction usually makes one
+summary request; a split turn can require two, and configured transient-error retries can make
+more. `reserveTokens` controls the compaction threshold, not an explicit summary output limit;
+Pi's providers determine the output budget.
 
 The guidance retains continuation-relevant facts, not complete reports or a second ledger. It
 separates user authorization from worker suggestions, recorded state from activity, and a reported
@@ -51,7 +53,9 @@ LLM summarization remains lossy, even with reviewed instructions and mechanical 
 
 ## Compatibility
 
-The integration targets Pi 1.2.0's public compaction helper and model registry. It uses the current
+The integration requires stable Pi 1.5.2 or newer and uses its public compaction helper and model
+registry. Older running runtimes cancel guided compaction before making a model request; restart
+Pi after upgrading, since `/reload` only reloads extensions. The integration uses the current
 physical model and thinking level, request-time registry authentication/provider configuration,
 and effective retry/timeout settings. It does not hardcode a provider, copy credentials between
 providers, select a replacement model, or install a second Pi SDK.

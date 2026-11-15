@@ -5,7 +5,7 @@ Enable Captain in an existing session with `/captain`; ordinary sessions stay un
 
 ## Installation
 
-Requires Pi 1.2.0 or newer, Paj, Node.js 24 or newer, tmux, and `flock` (util-linux) on Linux.
+Requires Pi 1.5.2 or newer, Paj, Node.js 24 or newer, tmux, and `flock` (util-linux) on Linux.
 Tested with tmux 3.7c.
 
 Install Paj first, then add the Pi package:

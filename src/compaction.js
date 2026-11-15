@@ -16,14 +16,11 @@ export function carryCaptainFiles(preparation, entries) {
   return { ...preparation, fileOps };
 }
 
-function focusedContext(context, focus) {
-  const messages = [...context.messages];
-  const last = messages.at(-1);
-  if (last?.role !== 'user') throw new Error('Unsupported Pi summarization context');
-  const text = `\n\n# Additional summary focus\n${focus}`;
-  messages[messages.length - 1] = { ...last, content: typeof last.content === 'string'
-    ? last.content + text : [...last.content, { type: 'text', text }] };
-  return { ...context, messages };
+export function supportsCaptainCompaction(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version ?? '');
+  if (!match) return false;
+  const [major, minor, patch] = match.slice(1).map(Number);
+  return major > 1 || (major === 1 && (minor > 5 || (minor === 5 && patch >= 2)));
 }
 
 export function cancelCaptainCompaction(ctx, error, signal) {
@@ -66,8 +63,7 @@ export async function compactCaptain(event, ctx, { compact, settings = {}, think
     };
     const stream = async (model, context, options) => {
       check();
-      // Pi's helper omits customInstructions on split-prefix requests; focus every request here.
-      const responseStream = ctx.modelRegistry.streamSimple(model, focusedContext(context, focus), { ...requestOptions, ...options });
+      const responseStream = ctx.modelRegistry.streamSimple(model, context, { ...requestOptions, ...options });
       const response = await responseStream.result();
       check();
       if (response.stopReason === 'aborted') throw new Error('Provider aborted Captain compaction');
@@ -79,7 +75,7 @@ export async function compactCaptain(event, ctx, { compact, settings = {}, think
       return responseStream;
     };
     const preparation = carryCaptainFiles(event.preparation, event.branchEntries);
-    const result = await compact(preparation, ctx.model, undefined, undefined, undefined,
+    const result = await compact(preparation, ctx.model, undefined, undefined, focus,
       event.signal, thinkingLevel, stream, undefined, retry);
     check();
     if (!result.summary?.trim() || result.firstKeptEntryId !== preparation.firstKeptEntryId

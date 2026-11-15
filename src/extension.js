@@ -7,7 +7,7 @@ import { createPajClient } from './paj.js';
 import { createTaskStore } from './tasks.js';
 import { listWorkspaces } from './workspaces.js';
 import { launchMain } from './launch.js';
-import { cancelCaptainCompaction, carryCaptainFiles, compactCaptain } from './compaction.js';
+import { cancelCaptainCompaction, carryCaptainFiles, compactCaptain, supportsCaptainCompaction } from './compaction.js';
 
 const MODE_ENTRY = 'paj-captain-mode';
 const CHILD_TOOLS = ['spawn_sub_agent', 'list_sub_agents', 'assign_subagent_task', 'complete_subagent_task'];
@@ -204,6 +204,9 @@ export function registerCaptain(pi, Type, options = {}) {
         // Pi ignores file metadata from hook-generated summaries, including after /captain off.
         if (preparation !== event.preparation) event.preparation.fileOps = preparation.fileOps;
         return;
+      }
+      if (!supportsCaptainCompaction(options.piVersion)) {
+        throw new Error('Captain compaction requires Pi 1.5.2 or newer; restart Pi after upgrading');
       }
       const id = identity(ctx);
       return await compactCaptain(event, ctx, { compact: options.compact, settings: pi.getSettings?.(),

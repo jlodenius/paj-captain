@@ -47,7 +47,7 @@ function fixture(t, overrides = {}) {
   };
   const ctx = { cwd: root, sessionManager: { getSessionId: () => ownPiId, getBranch: () => entries },
     ui: { setStatus() {}, notify: (...args) => notices.push(args) }, waitForIdle: async () => {} };
-  registerCaptain(pi, Type, { ...overrides, paths, client });
+  registerCaptain(pi, Type, { piVersion: '1.5.2', ...overrides, paths, client });
   return { root, paths, client, calls, entries, notices, handlers, tools, pi, ctx,
     command: args => commands.get('captain').handler(args, ctx),
     tool: (name, params = {}, id = 'tool-call') => tools.get(name).execute(id, params, undefined, undefined, ctx),
@@ -107,6 +107,18 @@ test('disabling Captain mid-compaction cancels instead of accepting stale result
   await f.command('on');
   assert.deepEqual(await f.event('session_before_compact', compactionEvent(f.entries)), { cancel: true });
   assert.match(f.notices.at(-1)[0], /mode changed/);
+});
+
+test('old, missing, and prerelease Pi runtimes cannot silently omit split-summary guidance', async t => {
+  for (const piVersion of [undefined, '1.2.0', '1.5.1', '1.5.2-dev', 'invalid']) {
+    let calls = 0;
+    const f = fixture(t, { piVersion, compact: async preparation => { calls++; return compactResult(preparation); } });
+    compactionContext(f);
+    await f.command('on');
+    assert.deepEqual(await f.event('session_before_compact', compactionEvent(f.entries)), { cancel: true });
+    assert.equal(calls, 0);
+    assert.match(f.notices.at(-1)[0], /requires Pi 1.5.2/);
+  }
 });
 
 test('settings or notification failures cannot cause unguided fallback', async t => {
