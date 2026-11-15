@@ -18,6 +18,10 @@ read-only `inspect_agent` is published in Paj, with conditional Captain integrat
 must be loaded in both caller and target. Tests cover actual Pi idle/busy streaming inspection and
 owned-subagent access without additional target model turns or conversation mutation.
 
+Captain-aware compaction reuses Pi's summarizer with reviewed coordination guidance, including
+split-turn summaries. It retains the existing ledger rather than adding checkpoint storage.
+See [compaction integration](docs/compaction.md) for safety checks and compatibility limits.
+
 Two independent GPT 6.1 sol reviews (medium and max thinking) found no substantive issues in the
 initial proposal. The later standalone voice separation and confirmed settings below have not
 received another independent review.

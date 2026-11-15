@@ -7,6 +7,7 @@ import { createPajClient } from './paj.js';
 import { createTaskStore } from './tasks.js';
 import { listWorkspaces } from './workspaces.js';
 import { launchMain } from './launch.js';
+import { cancelCaptainCompaction, carryCaptainFiles, compactCaptain } from './compaction.js';
 
 const MODE_ENTRY = 'paj-captain-mode';
 const CHILD_TOOLS = ['spawn_sub_agent', 'list_sub_agents', 'assign_subagent_task', 'complete_subagent_task'];
@@ -193,6 +194,22 @@ export function registerCaptain(pi, Type, options = {}) {
       }
       try { await client.resolveMain(event.input.recipient, identity(ctx)); }
       catch (error) { return { block: true, reason: error.message }; }
+    }
+  });
+
+  pi.on('session_before_compact', async (event, ctx) => {
+    try {
+      if (!enabled) {
+        const preparation = carryCaptainFiles(event.preparation, event.branchEntries);
+        // Pi ignores file metadata from hook-generated summaries, including after /captain off.
+        if (preparation !== event.preparation) event.preparation.fileOps = preparation.fileOps;
+        return;
+      }
+      const id = identity(ctx);
+      return await compactCaptain(event, ctx, { compact: options.compact, settings: pi.getSettings?.(),
+        thinkingLevel: pi.getThinkingLevel?.(), isCurrent: () => enabled && sessionId === id && identity(ctx) === id });
+    } catch (error) {
+      return cancelCaptainCompaction(ctx, error, event.signal);
     }
   });
 

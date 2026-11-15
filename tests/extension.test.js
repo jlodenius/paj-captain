@@ -54,6 +54,85 @@ function fixture(t, overrides = {}) {
     event: (name, event = {}) => handlers.get(name)(event, ctx) };
 }
 
+function compactionEvent(entries = []) {
+  return { branchEntries: entries, signal: new AbortController().signal, preparation: {
+    firstKeptEntryId: 'kept-entry', tokensBefore: 12000, previousSummary: undefined,
+    fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+  } };
+}
+
+function compactionContext(f) {
+  f.ctx.model = { id: 'test-model', api: 'test-api' };
+  f.ctx.modelRegistry = { streamSimple() { throw new Error('Unexpected provider call'); } };
+}
+
+const compactResult = preparation => ({ summary: 'Reviewed summary',
+  firstKeptEntryId: preparation.firstKeptEntryId, tokensBefore: preparation.tokensBefore,
+  details: { readFiles: [], modifiedFiles: [] }, usage: { totalTokens: 10 } });
+
+test('compaction stays stock while dormant, after disabling, and in a new session', async t => {
+  let calls = 0;
+  const f = fixture(t, { compact: async preparation => { calls++; return compactResult(preparation); } });
+  compactionContext(f);
+  const event = compactionEvent(f.entries);
+  const fileOps = event.preparation.fileOps;
+  assert.equal(await f.event('session_before_compact', event), undefined);
+  assert.equal(event.preparation.fileOps, fileOps);
+  assert.equal(calls, 0);
+  await f.command('on');
+  assert.equal((await f.event('session_before_compact', event)).compaction.details.pajCaptainCompaction, 1);
+  await f.command('off');
+  assert.equal(await f.event('session_before_compact', event), undefined);
+  f.entries.length = 0;
+  await f.event('session_start');
+  assert.equal(await f.event('session_before_compact', event), undefined);
+  assert.equal(calls, 1);
+});
+
+test('reloaded Captain retains the compaction hook and preserves result metadata', async t => {
+  const f = fixture(t, { compact: async preparation => compactResult(preparation) });
+  compactionContext(f);
+  await f.command('on');
+  await f.event('session_start');
+  const result = await f.event('session_before_compact', compactionEvent(f.entries));
+  assert.equal(result.compaction.summary, 'Reviewed summary');
+  assert.deepEqual(result.compaction.usage, { totalTokens: 10 });
+  assert.equal(result.compaction.firstKeptEntryId, 'kept-entry');
+});
+
+test('disabling Captain mid-compaction cancels instead of accepting stale results', async t => {
+  let f;
+  f = fixture(t, { compact: async preparation => { await f.command('off'); return compactResult(preparation); } });
+  compactionContext(f);
+  await f.command('on');
+  assert.deepEqual(await f.event('session_before_compact', compactionEvent(f.entries)), { cancel: true });
+  assert.match(f.notices.at(-1)[0], /mode changed/);
+});
+
+test('settings or notification failures cannot cause unguided fallback', async t => {
+  const f = fixture(t);
+  await f.command('on');
+  f.pi.getSettings = () => { throw new Error('Settings unavailable'); };
+  f.ctx.ui.notify = () => { throw new Error('Notification unavailable'); };
+  assert.deepEqual(await f.event('session_before_compact', compactionEvent(f.entries)), { cancel: true });
+});
+
+test('stock compaction after Captain off carries its last structured file metadata', async t => {
+  const f = fixture(t);
+  const previous = { type: 'compaction', fromHook: true, summary: 'Previous summary',
+    details: { pajCaptainCompaction: 1, readFiles: ['old.txt'], modifiedFiles: ['edited.txt'] } };
+  f.entries.push(previous);
+  const event = compactionEvent(f.entries);
+  event.preparation.previousSummary = previous.summary;
+  const original = event.preparation.fileOps;
+  assert.equal(await f.event('session_before_compact', event), undefined);
+  assert.deepEqual([...event.preparation.fileOps.read], ['old.txt']);
+  assert.deepEqual([...event.preparation.fileOps.edited], ['edited.txt']);
+  assert.equal(original.read.size, 0);
+  previous.details.readFiles = null;
+  assert.deepEqual(await f.event('session_before_compact', event), { cancel: true });
+});
+
 test('ordinary sessions stay dormant and disabled tools cannot execute', async t => {
   const f = fixture(t);
   await f.event('session_start');

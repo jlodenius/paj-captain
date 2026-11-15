@@ -82,13 +82,25 @@ identity that has disappeared. No worker is stopped automatically.
 Storage is bounded to 128 assignments per Captain session and 64 retained questions per assignment.
 Question overflow is flagged; completed results remain processable even after progress saturation.
 
+## Compaction
+
+While Captain is enabled, manual and automatic compaction reuse Pi's summarizer with additional
+[reviewed guidance](src/compaction-guidance.md). It prioritizes user decisions, approval gates,
+continuation-relevant task references, and uncertainty. The same focus reaches split-turn summaries;
+there is no separate checkpoint database or extra rewrite pass. The durable ledger remains separate.
+
+Cancelled, empty, or failed summaries are not saved or retried without guidance. Virtual routing
+models are currently unsupported: select a physical model, or turn Captain off before compacting.
+Summaries remain lossy; guidance is not a guarantee that every detail survives.
+
+See [compaction integration](docs/compaction.md) for compatibility limits and failure behavior.
+
 ## Separation
 
 Captain reuses Paj discovery, messaging, and optional shared inspection. Inspection requires the
 updated Paj extension in both caller and target; older installations retain messaging-only status.
 Captain adds no voice dependencies, audio capture, public listeners, background daemon, or changes
-to paj.nvim. Independent `paj-voice` and phone voice
-through paj-rc are later projects.
+to paj.nvim. Independent `paj-voice` and phone voice through paj-rc are later projects.
 
 ## Development
 
