@@ -77,7 +77,6 @@ sandbox. Queued work is not proof of execution; uncertain actions are not automa
 ## Reference
 
 - [Captain workflow](skills/paj-captain/SKILL.md)
-- [Compaction guidance and compatibility](docs/compaction.md)
 
 ## Development
 
