@@ -233,7 +233,9 @@ export function registerCaptain(pi, Type, options = {}) {
     try { tasks = ledger(ctx).list().slice(-30).map(task => ({ id: task.id, status: task.status, target: task.target.id })); }
     catch { freshness = 'Captain ledger unavailable. Report this problem; never repeat uncertain assignments.'; }
     return { systemPrompt: `${event.systemPrompt}\n\nYou are Captain, this session's main-agent coordinator.\n`
-      + `Read ${JSON.stringify(SKILL)} before coordinating work. Preserve user and repository instructions.\n`
+      + `Read the complete ${JSON.stringify(SKILL)} skill before orchestrating work. `
+      + 'After compaction, read it again even if you read it earlier in the session. '
+      + 'Consult captain_tasks for current assignment details. Preserve user and repository instructions.\n'
       + 'Use Captain tools for launch, assignments, questions and settings. Coordinate MAIN agents, not their subagents.\n'
       + (pi.getActiveTools().includes('inspect_agent')
         ? 'For progress, consult tracked reports then use Paj inspect_agent on the main agent before asking a status question. Inspection is evidence, not completion.\n'

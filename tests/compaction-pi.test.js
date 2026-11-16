@@ -300,6 +300,10 @@ test('real Pi persists guided manual and repeated compactions, restores mode on 
     assertGuided(f.requests, focus);
     await f.command('/compaction-test-reload');
     await f.prompt('Continue the discussion only. '.repeat(160));
+    const resumedSystem = JSON.stringify(f.requests.at(-1).payload.messages
+      .filter(message => ['system', 'developer'].includes(message.role)));
+    assert.match(resumedSystem, /Read the complete .*skills\/paj-captain\/SKILL\.md/);
+    assert.match(resumedSystem, /After compaction, read it again even if you read it earlier in the session/);
     const start = f.requests.length;
     const second = await f.request('compact');
     assertPersisted(f, second);
@@ -314,6 +318,8 @@ test('real Pi persists guided manual and repeated compactions, restores mode on 
     assert.ok(!existsSync(join(f.root, 'draft.md')), 'Historical write was not executed');
     await f.command('/captain off');
     await f.prompt('Continue without Captain. '.repeat(160));
+    assert.doesNotMatch(JSON.stringify(f.requests.at(-1).payload.messages
+      .filter(message => ['system', 'developer'].includes(message.role))), /After compaction, read it again/);
     const offStart = f.requests.length;
     await f.request('compact', { customInstructions: 'OFF-MANUAL-FOCUS' });
     const stock = f.entries().filter(value => value.type === 'compaction').at(-1);

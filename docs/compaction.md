@@ -1,8 +1,9 @@
 # Compaction integration
 
-When Captain is enabled, [additional guidance](../src/compaction-guidance.md) helps Pi preserve user
-intent, unresolved assignments, and uncertainty about external actions. `/captain off` restores
-Pi's ordinary summarization.
+When Captain is enabled, a [short checklist](../src/compaction-guidance.md) preserves assignment,
+question, launch, and evidence references. The per-turn Captain reminder tells the agent to reread
+the complete Captain skill after compaction and consult `captain_tasks` for current details.
+`/captain off` restores Pi's ordinary summarization.
 
 ## Flow
 

@@ -100,6 +100,21 @@ test('reloaded Captain retains the compaction hook and preserves result metadata
   assert.equal(result.compaction.firstKeptEntryId, 'kept-entry');
 });
 
+test('enabled turns remind Captain to reread the complete skill after compaction', async t => {
+  const f = fixture(t, { compact: async preparation => compactResult(preparation) });
+  compactionContext(f);
+  await f.command('on');
+  for (const compacted of [false, true]) {
+    if (compacted) await f.event('session_before_compact', compactionEvent(f.entries));
+    const { systemPrompt } = await f.event('before_agent_start', { systemPrompt: 'Original' });
+    assert.match(systemPrompt, /Read the complete .*skills\/paj-captain\/SKILL\.md/);
+    assert.match(systemPrompt, /After compaction, read it again even if you read it earlier in the session/);
+    assert.match(systemPrompt, /captain_tasks for current assignment details/);
+  }
+  await f.command('off');
+  assert.equal(await f.event('before_agent_start', { systemPrompt: 'Original' }), undefined);
+});
+
 test('disabling Captain mid-compaction cancels instead of accepting stale results', async t => {
   let f;
   f = fixture(t, { compact: async preparation => { await f.command('off'); return compactResult(preparation); } });
