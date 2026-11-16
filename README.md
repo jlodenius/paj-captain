@@ -37,8 +37,8 @@ Rebuild NixOS and skip `pi install`; Home Manager loads the extension and skill.
 Captain keeps your current Pi model and thinking level. New workers use Pi's startup defaults
 unless you supply a model.
 
-Use GPT/Codex for now; Claude bridge has a known
-[instruction-delivery limitation](docs/research/captain-model-compatibility.md).
+Use GPT/Codex for now. Claude bridge does not receive Captain's system-prompt additions, so its
+registered tools and skills alone do not provide full Captain behavior.
 
 ## Setup
 
@@ -78,7 +78,6 @@ sandbox. Queued work is not proof of execution; uncertain actions are not automa
 
 - [Captain workflow](skills/paj-captain/SKILL.md)
 - [Compaction guidance and compatibility](docs/compaction.md)
-- [Design and delivery plan](plan.md)
 
 ## Development
 
