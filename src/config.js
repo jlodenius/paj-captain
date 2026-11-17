@@ -12,7 +12,7 @@ export function captainPaths(env = process.env, home = homedir()) {
   const configured = env.PI_CODING_AGENT_DIR || join(home, '.pi', 'agent');
   const agentDir = configured === '~' ? home : configured.startsWith('~/')
     ? join(home, configured.slice(2)) : resolve(configured);
-  return { agentDir, configFile: join(agentDir, 'captain.json'),
+  return { agentDir, configFile: join(agentDir, 'paj.json'),
     stateDir: join(agentDir, 'captain', 'sessions') };
 }
 
@@ -51,28 +51,37 @@ export function validateConfig(value) {
     exclude: patterns(workspaces.exclude ?? [], 'exclude') }, reporting: { progress, verbosity } };
 }
 
-export function loadConfig(file) {
+function loadRoot(file) {
   try {
     const stat = statSync(file);
-    if (!stat.isFile()) throw new Error('Captain configuration must be a regular file');
-    if (stat.size > 65536) throw new Error('Captain configuration is too large');
+    if (!stat.isFile()) throw new Error('Paj configuration must be a regular file');
+    if (stat.size > 65536) throw new Error('Paj configuration is too large');
     const raw = readFileSync(file, 'utf8');
-    if (Buffer.byteLength(raw) > 65536) throw new Error('Captain configuration is too large');
-    return validateConfig(JSON.parse(raw));
+    if (Buffer.byteLength(raw) > 65536) throw new Error('Paj configuration is too large');
+    const root = JSON.parse(raw);
+    if (!root || typeof root !== 'object' || Array.isArray(root)) throw new Error('Invalid Paj configuration root');
+    return root;
   } catch (error) {
-    if (error.code === 'ENOENT') return validateConfig({});
+    if (error.code === 'ENOENT') return {};
     throw error;
   }
 }
 
+export function loadConfig(file) {
+  const root = loadRoot(file);
+  return validateConfig(Object.hasOwn(root, 'captain') ? root.captain : {});
+}
+
 export function saveConfig(file, value) {
   const config = validateConfig(value);
-  const data = `${JSON.stringify(config, null, 2)}\n`;
-  if (Buffer.byteLength(data) > 65536) throw new Error('Captain configuration is too large');
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   try {
-    if (!lstatSync(file).isFile()) throw new Error('Edit your declarative Captain config at its source');
+    if (!lstatSync(file).isFile()) throw new Error('Edit your declarative Paj config at its source');
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const root = loadRoot(file);
+  root.captain = config;
+  const data = `${JSON.stringify(root, null, 2)}\n`;
+  if (Buffer.byteLength(data) > 65536) throw new Error('Paj configuration is too large');
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const temporary = join(dirname(file), `.captain-${randomUUID()}.json`);
   let fd;
   try {

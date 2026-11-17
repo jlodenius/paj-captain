@@ -266,11 +266,16 @@ test('launch receives freshly read policy and stable request identity, and shutd
   assert.equal(launches.length, 1);
 });
 
-test('settings persist explicit user preferences and are reflected in the next prompt', async t => {
+test('settings update only the shared Captain section and are reflected in the next prompt', async t => {
   const f = fixture(t);
+  const siblings = { subagents: { future: ['opaque'] }, voice: { future: true }, other: null };
+  writeFileSync(f.paths.configFile, JSON.stringify(siblings));
   await f.command('');
   await f.tool('captain_settings', { allow: ['~/Development/**', '~/.nixos'], progress: true, verbosity: 'detailed' });
-  assert.equal(loadConfig(f.paths.configFile).reporting.progress, true);
+  const config = loadConfig(f.paths.configFile);
+  assert.equal(config.reporting.progress, true);
+  assert.deepEqual(JSON.parse(readFileSync(f.paths.configFile, 'utf8')), { ...siblings, captain: config });
+  assert.equal(f.paths.configFile, join(f.root, 'paj.json'));
   const prompt = await f.event('before_agent_start', { systemPrompt: 'Original' });
   assert.match(prompt.systemPrompt, /include useful progress/);
   assert.match(prompt.systemPrompt, /detailed/);

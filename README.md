@@ -42,24 +42,31 @@ registered tools and skills alone do not provide full Captain behavior.
 
 ## Setup
 
-Create `~/.pi/agent/captain.json` (or `captain.json` under `PI_CODING_AGENT_DIR`):
+Merge a `captain` section into `~/.pi/agent/paj.json` (or `paj.json` under
+`PI_CODING_AGENT_DIR`). Preserve existing `subagents`, `voice`, and other sibling settings; do not
+overwrite the file with this example:
 
 ```json
 {
-  "version": 1,
-  "workspaces": {
-    "allow": ["~/Development/**", "~/.nixos"],
-    "exclude": []
-  },
-  "reporting": {
-    "progress": false,
-    "verbosity": "brief"
+  "captain": {
+    "version": 1,
+    "workspaces": {
+      "allow": ["~/Development/**", "~/.nixos"],
+      "exclude": []
+    },
+    "reporting": {
+      "progress": false,
+      "verbosity": "brief"
+    }
   }
 }
 ```
 
 Adjust the workspace paths to your projects. Without an allowlist, Captain can message existing
-agents but cannot launch new ones. Ask Captain to change preferences, or edit this file directly.
+agents but cannot launch new ones. Ask Captain to change preferences, or edit its section directly.
+Captain reads only its own section and preserves sibling settings when saving. For a declarative
+symlink, edit the source instead. The old `captain.json` file is not read; move its contents under
+`captain` in the shared file when upgrading.
 
 Run `/reload`, then `/captain`. Restart Pi instead if you upgraded Pi itself.
 
@@ -73,6 +80,20 @@ Use `/captain status`, `/captain settings`, and `/captain tasks` to inspect stat
 
 Workspace rules restrict launches, not communication. These are tool-level checks, not an OS
 sandbox. Queued work is not proof of execution; uncertain actions are not automatically repeated.
+
+### Optional voice reports
+
+Install `paj-voice` separately to hear Captain reports; it is not a Captain dependency.
+With Captain and voice enabled, the agent uses `voice_speak` for concise orchestration reports,
+normally one sentence of about 30 words or fewer. Questions, blockers, and results are essential;
+eyes-free mode also includes meaningful assignment/progress updates even when `reporting.progress`
+is false. Detailed screen answers stay unchanged. Raw worker reports and tool narration are not
+spoken automatically. Captain owns task narration; the voice addon may add a brief response-completion
+notice.
+
+The addons discover each other through Pi's versioned event bus in either load order. Turning
+Captain off or replacing/shutting down its session releases its voice reporter registration.
+Without a compatible voice addon, Captain remains text-only.
 
 ## Reference
 

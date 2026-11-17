@@ -7,6 +7,7 @@ import { createPajClient } from './paj.js';
 import { createTaskStore } from './tasks.js';
 import { listWorkspaces } from './workspaces.js';
 import { launchMain } from './launch.js';
+import { createCaptainVoice } from './voice.js';
 import { cancelCaptainCompaction, carryCaptainFiles, compactCaptain, supportsCaptainCompaction } from './compaction.js';
 
 const MODE_ENTRY = 'paj-captain-mode';
@@ -30,6 +31,7 @@ export function registerCaptain(pi, Type, options = {}) {
   const workspaces = options.listWorkspaces ?? listWorkspaces;
   const launch = options.launchMain ?? launchMain;
   let enabled = false;
+  const voice = createCaptainVoice(pi.events);
   let store;
   let sessionId;
   let restoredTools = [];
@@ -59,6 +61,7 @@ export function registerCaptain(pi, Type, options = {}) {
     return self;
   };
   const expose = next => {
+    voice.setEnabled(next);
     if (enabled === next) return;
     if (next) restoredTools = pi.getActiveTools().filter(name => CHILD_TOOLS.includes(name));
     enabled = next;
@@ -218,6 +221,7 @@ export function registerCaptain(pi, Type, options = {}) {
 
   pi.on('before_agent_start', async (event, ctx) => {
     if (!enabled) return;
+    voice.refresh();
     let config;
     try { config = loadConfig(paths.configFile); } catch {
       return { systemPrompt: `${event.systemPrompt}\n\nCaptain configuration is invalid. Tell the user to fix `
