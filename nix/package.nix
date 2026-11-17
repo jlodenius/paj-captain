@@ -4,9 +4,12 @@ stdenvNoCC.mkDerivation {
   version = (builtins.fromJSON (builtins.readFile ../package.json)).version;
   src = lib.cleanSourceWith {
     src = ../.;
-    filter = name: type:
+    filter = name: type: let
+      base = builtins.baseNameOf name;
+    in
       lib.cleanSourceFilter name type
-      && !(builtins.elem (builtins.baseNameOf name) ["node_modules" "dist"]);
+      && !(builtins.elem base ["node_modules" "dist" ".cache" "result"])
+      && !(lib.hasPrefix "result-" base);
   };
   nativeBuildInputs = [nodejs_24];
   nativeCheckInputs = [util-linux];

@@ -105,12 +105,13 @@ Maintained source is TypeScript. Installs build JavaScript in `dist` so Node can
 inside any package location; Home Manager builds the same output without npm downloads.
 
 ```sh
-npm install
+npm_config_cache=.cache/npm npm ci --ignore-scripts
+npm run build
 npm run typecheck
 npm test
 ```
 
-`npm install` builds `dist`; run `npm run build` after source changes. Optional integration tests
+Git installs build `dist` automatically; rebuild after source changes. Optional integration tests
 use isolated state and local fake providers. Set `PAJ_CAPTAIN_PI_BIN`, `PAJ_CAPTAIN_PAJ_BIN`, and
 `PAJ_CAPTAIN_PAJ_EXTENSION` explicitly to test Pi/Paj; set `PAJ_CAPTAIN_VOICE_DIR` to test voice.
 No sibling checkout is assumed.
