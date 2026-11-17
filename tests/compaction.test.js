@@ -4,7 +4,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { CAPTAIN_COMPACTION_GUIDANCE, carryCaptainFiles, compactCaptain } from '../src/compaction.js';
+import { CAPTAIN_COMPACTION_GUIDANCE, carryCaptainFiles, compactCaptain } from '../src/compaction.ts';
 
 async function installedCompact() {
   const require = createRequire(import.meta.url);
@@ -334,6 +334,7 @@ test('physical provider adapter preserves public request settings and leaves aut
   for (const [settings, expected] of [
     [{}, { timeoutMs: 300000, websocketConnectTimeoutMs: 15000, maxRetries: undefined, maxRetryDelayMs: 60000 }],
     [{ httpIdleTimeoutMs: 0 }, { timeoutMs: 2147483647 }],
+    [{ websocketConnectTimeoutMs: 'disabled' }, { websocketConnectTimeoutMs: 2147483647 }],
     [{ httpIdleTimeoutMs: 4000, websocketConnectTimeoutMs: 6000,
       retry: { provider: { timeoutMs: 2000, maxRetries: 2, maxRetryDelayMs: 0 } } },
     { timeoutMs: 2000, websocketConnectTimeoutMs: 6000, maxRetries: 2, maxRetryDelayMs: 0 }],

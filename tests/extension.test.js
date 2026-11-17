@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, statSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { registerCaptain } from '../src/extension.js';
-import { saveConfig, captainPaths, loadConfig } from '../src/config.js';
+import { registerCaptain } from '../src/extension.ts';
+import { saveConfig, captainPaths, loadConfig } from '../src/config.ts';
 
 const Type = Object.fromEntries(['Object', 'String', 'Optional', 'Array', 'Boolean']
   .map(name => [name, value => ({ type: name, value })]));

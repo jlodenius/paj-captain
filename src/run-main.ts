@@ -1,9 +1,10 @@
+import { errorMessage, type LaunchPayload } from './types.ts';
 import { accessSync, constants } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { resolveWorkspace } from './workspaces.js';
+import { resolveWorkspace } from './workspaces.ts';
 
-export function mainEnvironment(source, overrides = {}, agentName) {
+export function mainEnvironment(source: NodeJS.ProcessEnv, overrides: NodeJS.ProcessEnv = {}, agentName: string) {
   const env = { ...source };
   for (const key of Object.keys(env)) {
     if (key.startsWith('PAJ_') || key.startsWith('CAPTAIN_') || key.startsWith('PI_CAPTAIN_')) {
@@ -19,7 +20,7 @@ export function mainEnvironment(source, overrides = {}, agentName) {
   return env;
 }
 
-export function findExecutable(command, env = process.env) {
+export function findExecutable(command: string, env = process.env) {
   if (path.isAbsolute(command)) {
     accessSync(command, constants.X_OK);
     return command;
@@ -32,7 +33,9 @@ export function findExecutable(command, env = process.env) {
   throw new Error(`Executable not found: ${command}`);
 }
 
-export function runMain(payload, { env = process.env, exec = process.execve } = {}) {
+export function runMain(payload: LaunchPayload, { env = process.env, exec = process.execve }: {
+  env?: NodeJS.ProcessEnv; exec?: typeof process.execve;
+} = {}) {
   if (!payload || !path.isAbsolute(payload.piExecutable) || !payload.agentName) {
     throw new Error('Invalid main-agent launch payload');
   }
@@ -42,7 +45,10 @@ export function runMain(payload, { env = process.env, exec = process.execve } = 
   if (payload.model) args.push('--model', payload.model);
   const childEnv = mainEnvironment(env, payload.environment, payload.agentName);
   process.chdir(workspace);
-  exec(payload.piExecutable, args, childEnv);
+  if (!exec) throw new Error('Node.js execve is unavailable; use Node.js 24 or newer');
+  const definedEnv = Object.fromEntries(Object.entries(childEnv)
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+  exec(payload.piExecutable, args, definedEnv);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -50,7 +56,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (process.argv.length !== 3) throw new Error('Expected one encoded launch payload');
     runMain(JSON.parse(Buffer.from(process.argv[2], 'base64url').toString('utf8')));
   } catch (error) {
-    process.stderr.write(`Captain main-agent startup failed: ${error.message}\n`);
+    process.stderr.write(`Captain main-agent startup failed: ${errorMessage(error)}\n`);
     process.exitCode = 1;
   }
 }

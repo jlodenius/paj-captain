@@ -1,3 +1,18 @@
+import { errorCode, errorMessage, type LaunchRequest, type WorkspacePolicy, type RunCommand } from './types.ts';
+
+interface LaunchResult {
+  tmuxSession: string; agentName: string; workspace: string; status: 'launched'; attachCommand: string;
+}
+interface LaunchReceipt {
+  version: 1;
+  state: 'prepared' | 'launched' | 'delivery_unknown';
+  fingerprint: string;
+  result: LaunchResult;
+}
+interface LaunchOptions {
+  env?: NodeJS.ProcessEnv; home?: string; base?: string; stateDir?: string;
+  nodeExecutable?: string; piExecutable?: string; run?: RunCommand;
+}
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -8,20 +23,21 @@ import {
   mkdirSync, lstatSync, openSync, closeSync, writeFileSync, readFileSync,
   fsyncSync, renameSync, constants,
 } from 'node:fs';
-import { resolveWorkspace } from './workspaces.js';
-import { findExecutable, mainEnvironment } from './run-main.js';
-import { captainPaths } from './config.js';
+import { resolveWorkspace } from './workspaces.ts';
+import { findExecutable, mainEnvironment } from './run-main.ts';
+import { captainPaths } from './config.ts';
 
 const execute = promisify(execFile);
-const helper = fileURLToPath(new URL('./run-main.js', import.meta.url));
+const helper = fileURLToPath(new URL(import.meta.url.endsWith('.ts')
+  ? './run-main.ts' : './run-main.js', import.meta.url));
 
-function secureDirectory(directory) {
+function secureDirectory(directory: string) {
   const absolute = path.resolve(directory);
   let current = path.parse(absolute).root;
   for (const part of absolute.slice(current.length).split(path.sep).filter(Boolean)) {
     current = path.join(current, part);
     try { mkdirSync(current, { mode: 0o700 }); } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
+      if (errorCode(error) !== 'EEXIST') throw error;
     }
     const stat = lstatSync(current);
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('Unsafe launch state directory');
@@ -29,7 +45,7 @@ function secureDirectory(directory) {
   return absolute;
 }
 
-function readReceipt(file) {
+function readReceipt(file: string): LaunchReceipt {
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const text = readFileSync(fd, 'utf8');
@@ -43,7 +59,7 @@ function readReceipt(file) {
   } finally { closeSync(fd); }
 }
 
-function writeReceipt(file, receipt, exclusive = false) {
+function writeReceipt(file: string, receipt: LaunchReceipt, exclusive = false) {
   const destination = exclusive ? file : `${file}.${randomUUID()}.tmp`;
   const fd = openSync(destination,
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
@@ -56,7 +72,8 @@ function writeReceipt(file, receipt, exclusive = false) {
   try { fsyncSync(directory); } finally { closeSync(directory); }
 }
 
-export async function launchMain({ workspace, name, model, requestId }, policy, options = {}) {
+export async function launchMain({ workspace, name, model, requestId }: LaunchRequest,
+  policy: WorkspacePolicy, options: LaunchOptions = {}): Promise<LaunchResult> {
   if (typeof requestId !== 'string' || !requestId.trim() || requestId.length > 512 ||
       requestId.includes('\0')) throw new Error('A nonempty launch requestId is required');
   if (name !== undefined && (typeof name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/.test(name))) {
@@ -74,7 +91,7 @@ export async function launchMain({ workspace, name, model, requestId }, policy, 
     .replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'main';
   const tmuxSession = `captain-${label}-${digest.slice(0, 16)}`;
   const agentName = `${label}-${digest.slice(0, 16)}`;
-  const result = {
+  const result: LaunchResult = {
     tmuxSession, agentName, workspace: canonical, status: 'launched',
     attachCommand: `TMUX= tmux -L default attach-session -t =${tmuxSession}`,
   };
@@ -92,12 +109,12 @@ export async function launchMain({ workspace, name, model, requestId }, policy, 
     return result;
   };
   try { lstatSync(receiptFile); return repeat(); } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+    if (errorCode(error) !== 'ENOENT') throw error;
   }
   const nodeExecutable = options.nodeExecutable ?? process.execPath;
   if (!path.isAbsolute(nodeExecutable)) throw new Error('Node executable must be absolute');
   const piExecutable = findExecutable(options.piExecutable ?? 'pi', sourceEnv);
-  const environment = {};
+  const environment: NodeJS.ProcessEnv = {};
   for (const key of ['PAJ_RUNTIME_DIR', 'PAJ_PROJECT_DIRS', 'PI_CODING_AGENT_DIR', 'XDG_RUNTIME_DIR', 'PATH', 'HOME']) {
     if (typeof sourceEnv[key] === 'string') environment[key] = sourceEnv[key];
   }
@@ -106,9 +123,9 @@ export async function launchMain({ workspace, name, model, requestId }, policy, 
     workspace: canonical, policy, home, agentName, model, piExecutable, environment,
   };
   const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const receipt = { version: 1, state: 'prepared', fingerprint, result };
+  const receipt: LaunchReceipt = { version: 1, state: 'prepared', fingerprint, result };
   try { writeReceipt(receiptFile, receipt, true); } catch (error) {
-    if (error.code === 'EEXIST') return repeat();
+    if (errorCode(error) === 'EEXIST') return repeat();
     throw error;
   }
   try {
@@ -126,6 +143,6 @@ export async function launchMain({ workspace, name, model, requestId }, policy, 
     return result;
   } catch (error) {
     try { writeReceipt(receiptFile, { ...receipt, state: 'delivery_unknown' }); } catch {}
-    throw new Error(`Main-agent launch outcome uncertain; do not retry: ${error.message}`, { cause: error });
+    throw new Error(`Main-agent launch outcome uncertain; do not retry: ${errorMessage(error)}`, { cause: error });
   }
 }

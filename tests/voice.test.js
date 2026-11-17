@@ -4,9 +4,9 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createCaptainVoice } from '../src/voice.js';
-import { registerCaptain } from '../src/extension.js';
-import { captainPaths } from '../src/config.js';
+import { createCaptainVoice } from '../src/voice.ts';
+import { registerCaptain } from '../src/extension.ts';
+import { captainPaths } from '../src/config.ts';
 
 const API_EVENT = 'paj-voice:api:v1';
 const STATE_EVENT = 'paj-voice:state:v1';
@@ -226,13 +226,15 @@ test('Captain lifecycle enables, disables, restores, reloads and shuts down its 
 });
 
 async function realVoice(t) {
-  const root = process.env.PAJ_CAPTAIN_VOICE_DIR
-    ? pathToFileURL(`${resolve(process.env.PAJ_CAPTAIN_VOICE_DIR)}/`)
-    : new URL('../../paj-voice/', import.meta.url);
-  const controller = new URL('src/controller.js', root);
-  const extension = new URL('src/extension.js', root);
+  if (!process.env.PAJ_CAPTAIN_VOICE_DIR) {
+    t.skip('Set PAJ_CAPTAIN_VOICE_DIR to enable optional voice integration tests');
+    return;
+  }
+  const root = pathToFileURL(`${resolve(process.env.PAJ_CAPTAIN_VOICE_DIR)}/`);
+  const controller = new URL('src/controller.ts', root);
+  const extension = new URL('src/extension.ts', root);
   if (!existsSync(controller) || !existsSync(extension)) {
-    t.skip('Optional real voice tests need a sibling paj-voice checkout or PAJ_CAPTAIN_VOICE_DIR');
+    t.skip('PAJ_CAPTAIN_VOICE_DIR must contain the maintained TypeScript voice sources');
     return;
   }
   return { ...await import(controller.href), ...await import(extension.href) };

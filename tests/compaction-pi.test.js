@@ -9,15 +9,14 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, rmSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createTaskStore } from '../src/tasks.js';
+import { createTaskStore } from '../src/tasks.ts';
 
 const execute = promisify(execFile);
 
 const rootPackage = fileURLToPath(new URL('../', import.meta.url));
-const pajExtension = process.env.PAJ_CAPTAIN_PAJ_EXTENSION
-  || fileURLToPath(new URL('../../paj/extensions/paj', import.meta.url));
+const pajExtension = process.env.PAJ_CAPTAIN_PAJ_EXTENSION;
 const guidance = readFileSync(new URL('../src/compaction-guidance.md', import.meta.url), 'utf8').trim();
-const realPi = { skip: !process.env.PAJ_CAPTAIN_PI_BIN || !process.env.PAJ_CAPTAIN_PAJ_BIN,
+const realPi = { skip: !process.env.PAJ_CAPTAIN_PI_BIN || !process.env.PAJ_CAPTAIN_PAJ_BIN || !pajExtension,
   timeout: 60000 };
 const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 

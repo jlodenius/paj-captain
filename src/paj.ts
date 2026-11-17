@@ -1,30 +1,34 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import { isRecord, type PajSession, type PajMessage, type MessageKind, type RunCommand } from './types.ts';
+
 const exec = promisify(execFile);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const kinds = new Set(['request', 'question', 'answer', 'update', 'result']);
-const nonempty = value => typeof value === 'string' && value.length > 0;
-const isId = value => typeof value === 'string' && uuid.test(value);
+const nonempty = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+const isId = (value: unknown): value is string => typeof value === 'string' && uuid.test(value);
 
-export function validSession(value) {
-  return value && isId(value.id) && nonempty(value.name)
+export function validSession(value: unknown): value is PajSession {
+  return isRecord(value) && isId(value.id) && nonempty(value.name)
     && (value.piSessionId == null || nonempty(value.piSessionId)) && typeof value.role === 'string'
     && (value.parentPiSessionId == null || nonempty(value.parentPiSessionId))
     && nonempty(value.projectId) && nonempty(value.projectRoot)
-    && ['idle', 'busy'].includes(value.status);
+    && (value.status === 'idle' || value.status === 'busy');
 }
 
-export function validMessage(value) {
-  return value && isId(value.id) && isId(value.from?.id) && nonempty(value.from?.name)
-    && isId(value.to) && typeof value.text === 'string' && kinds.has(value.kind)
-    && Number.isSafeInteger(value.createdAtMs) && value.createdAtMs >= 0
+export function validMessage(value: unknown): value is PajMessage {
+  return isRecord(value) && isRecord(value.from) && isId(value.id) && isId(value.from.id) && nonempty(value.from.name)
+    && isId(value.to) && typeof value.text === 'string' && typeof value.kind === 'string' && kinds.has(value.kind)
+    && typeof value.createdAtMs === 'number' && Number.isSafeInteger(value.createdAtMs) && value.createdAtMs >= 0
     && (value.taskId == null || nonempty(value.taskId))
     && (value.inReplyTo == null || isId(value.inReplyTo));
 }
 
-export function createPajClient({ run = exec, cwd, env = process.env } = {}) {
-  async function call(args) {
+export function createPajClient({ run = exec, cwd, env = process.env }: {
+  run?: RunCommand; cwd?: string; env?: NodeJS.ProcessEnv;
+} = {}) {
+  async function call(args: string[]): Promise<unknown> {
     const result = await run('paj', ['--json', ...args], {
       cwd, env, timeout: 15000, maxBuffer: 8 * 1024 * 1024, encoding: 'utf8',
     });
@@ -35,27 +39,28 @@ export function createPajClient({ run = exec, cwd, env = process.env } = {}) {
     try { return JSON.parse(result.stdout); }
     catch { throw new Error('Malformed Paj JSON'); }
   }
-  async function sessions() {
+  async function sessions(): Promise<PajSession[]> {
     const values = await call(['session', 'list', '--all']);
     if (!Array.isArray(values) || values.length > 10000
         || values.some(value => !validSession(value))) throw new Error('Invalid Paj sessions');
-    if (new Set(values.map(value => value.id)).size !== values.length) {
+    const validated = values.filter(validSession);
+    if (new Set(validated.map(value => value.id)).size !== values.length) {
       throw new Error('Duplicate Paj session identity');
     }
-    return values.filter(value => value.role === 'primary' && value.parentPiSessionId == null
+    return validated.filter(value => value.role === 'primary' && value.parentPiSessionId == null
       && nonempty(value.piSessionId));
   }
   return {
-    async listMain(selfPiSessionId) {
+    async listMain(selfPiSessionId: string) {
       return (await sessions()).filter(value => value.piSessionId !== selfPiSessionId);
     },
-    async self(piSessionId) {
+    async self(piSessionId: string) {
       if (!nonempty(piSessionId)) throw new Error('Stable Pi session ID required');
       const matches = (await sessions()).filter(value => value.piSessionId === piSessionId);
       if (matches.length !== 1) throw new Error('Captain main session is unavailable or ambiguous');
       return matches[0];
     },
-    async resolveMain(reference, selfPiSessionId) {
+    async resolveMain(reference: string, selfPiSessionId: string) {
       if (!nonempty(reference)) throw new Error('Exact agent reference required');
       const matches = (await sessions()).filter(value => value.id === reference
         || value.piSessionId === reference || value.name === reference);
@@ -64,7 +69,9 @@ export function createPajClient({ run = exec, cwd, env = process.env } = {}) {
       }
       return matches[0];
     },
-    async send({ from, recipient, text, kind, taskId, inReplyTo }) {
+    async send({ from, recipient, text, kind, taskId, inReplyTo }: {
+      from: string; recipient: string; text: string; kind: MessageKind; taskId?: string; inReplyTo?: string;
+    }) {
       if (!isId(from) || !isId(recipient) || !nonempty(text)
           || Buffer.byteLength(text) > 16384 || !kinds.has(kind)
           || (taskId != null && !nonempty(taskId))
@@ -80,7 +87,7 @@ export function createPajClient({ run = exec, cwd, env = process.env } = {}) {
       }
       return message;
     },
-    async incoming(pajSessionId) {
+    async incoming(pajSessionId: string) {
       if (!isId(pajSessionId)) throw new Error('Exact Paj session ID required');
       const batches = await Promise.all(['history', 'pending'].map(async command => {
         const values = await call(['message', command, pajSessionId]);
@@ -88,9 +95,9 @@ export function createPajClient({ run = exec, cwd, env = process.env } = {}) {
             || values.some(value => !validMessage(value) || value.to !== pajSessionId)) {
           throw new Error('Invalid Paj inbox');
         }
-        return values;
+        return values.filter(validMessage);
       }));
-      const messages = new Map();
+      const messages = new Map<string, PajMessage>();
       for (const value of batches.flat()) {
         if (messages.has(value.id) && JSON.stringify(messages.get(value.id)) !== JSON.stringify(value)) {
           throw new Error('Conflicting Paj message identity');

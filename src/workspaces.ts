@@ -1,10 +1,14 @@
+import { errorCode, type WorkspacePolicy } from './types.ts';
+
+interface CompiledPattern { root: string; parts: string[] }
+interface CompiledPolicy { allow: CompiledPattern[]; exclude: CompiledPattern[] }
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { realpathSync, statSync, opendirSync } from 'node:fs';
 
 const skipped = new Set(['.git', 'node_modules', '.direnv', '.cache']);
 
-function expand(value, home, base, pattern = false) {
+function expand(value: string, home: string, base: string, pattern = false) {
   if (typeof value !== 'string' || !value || value.includes('\0')) {
     throw new Error('Workspace paths must be nonempty strings without NUL');
   }
@@ -15,14 +19,14 @@ function expand(value, home, base, pattern = false) {
   return path.resolve(base, value);
 }
 
-function canonicalPrefix(value) {
-  const tail = [];
+function canonicalPrefix(value: string) {
+  const tail: string[] = [];
   let current = value;
   for (;;) {
     try {
       return path.join(realpathSync(current), ...tail);
     } catch (error) {
-      if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+      if (!['ENOENT', 'ENOTDIR'].includes(errorCode(error))) throw error;
       const parent = path.dirname(current);
       if (parent === current) throw error;
       tail.unshift(path.basename(current));
@@ -31,7 +35,7 @@ function canonicalPrefix(value) {
   }
 }
 
-function compile(pattern, home) {
+function compile(pattern: string, home: string): CompiledPattern {
   const absolute = expand(pattern, home, home, true);
   const parts = absolute.split(path.sep).filter(Boolean);
   const firstGlob = parts.findIndex(part => part.includes('*'));
@@ -43,17 +47,17 @@ function compile(pattern, home) {
   return { root, parts: [...root.split(path.sep).filter(Boolean), ...parts.slice(firstGlob)] };
 }
 
-function componentMatch(pattern, value) {
+function componentMatch(pattern: string, value: string) {
   const escaped = pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   return new RegExp(`^${escaped.join('.*')}$`, 'su').test(value);
 }
 
-function matches(pattern, target) {
+function matches(pattern: string[], target: string) {
   const parts = target.split(path.sep).filter(Boolean);
-  const memo = new Map();
-  const visit = (i, j) => {
+  const memo = new Map<string, boolean>();
+  const visit = (i: number, j: number): boolean => {
     const key = `${i}:${j}`;
-    if (memo.has(key)) return memo.get(key);
+    if (memo.has(key)) return memo.get(key)!;
     let result;
     if (i === pattern.length) result = j === parts.length;
     else if (pattern[i] === '**') {
@@ -65,7 +69,7 @@ function matches(pattern, target) {
   return visit(0, 0);
 }
 
-function compilePolicy(policy, home) {
+function compilePolicy(policy: WorkspacePolicy, home: string): CompiledPolicy {
   if (!policy || !Array.isArray(policy.allow) || !Array.isArray(policy.exclude)) {
     throw new Error('Workspace policy requires allow and exclude arrays');
   }
@@ -75,12 +79,13 @@ function compilePolicy(policy, home) {
   };
 }
 
-function permitted(target, policy) {
+function permitted(target: string, policy: CompiledPolicy) {
   return policy.allow.some(pattern => matches(pattern.parts, target)) &&
     !policy.exclude.some(pattern => matches(pattern.parts, target));
 }
 
-export function resolveWorkspace(input, policy, { home = homedir(), base = process.cwd() } = {}) {
+export function resolveWorkspace(input: string, policy: WorkspacePolicy,
+  { home = homedir(), base = process.cwd() }: { home?: string; base?: string } = {}) {
   const compiled = compilePolicy(policy, home);
   const target = realpathSync(expand(input, home, base));
   if (!statSync(target).isDirectory()) throw new Error('Workspace must be an existing directory');
@@ -88,13 +93,14 @@ export function resolveWorkspace(input, policy, { home = homedir(), base = proce
   return target;
 }
 
-export function listWorkspaces(policy, { home = homedir(), limit = 100 } = {}) {
+export function listWorkspaces(policy: WorkspacePolicy,
+  { home = homedir(), limit = 100 }: { home?: string; limit?: number } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
     throw new Error('Workspace listing limit must be an integer from 1 to 1000');
   }
   const compiled = compilePolicy(policy, home);
-  const found = new Set();
-  const seen = new Set();
+  const found = new Set<string>();
+  const seen = new Set<string>();
   const queue = [...new Set(compiled.allow.map(pattern => pattern.root))].sort()
     .map(directory => ({ directory, depth: 0 }));
   let position = 0;
@@ -110,7 +116,7 @@ export function listWorkspaces(policy, { home = homedir(), limit = 100 } = {}) {
       canonical = realpathSync(directory);
       if (canonical !== directory || !statSync(directory).isDirectory()) continue;
     } catch (error) {
-      if (['ENOENT', 'ENOTDIR', 'EACCES'].includes(error.code)) continue;
+      if (['ENOENT', 'ENOTDIR', 'EACCES'].includes(errorCode(error))) continue;
       throw error;
     }
     if (permitted(canonical, compiled)) {
@@ -131,7 +137,7 @@ export function listWorkspaces(policy, { home = homedir(), limit = 100 } = {}) {
         }
       }
     } catch (error) {
-      if (!['ENOENT', 'ENOTDIR', 'EACCES'].includes(error.code)) throw error;
+      if (!['ENOENT', 'ENOTDIR', 'EACCES'].includes(errorCode(error))) throw error;
     } finally {
       handle?.closeSync();
     }

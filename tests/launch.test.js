@@ -8,11 +8,11 @@ import { tmpdir } from 'node:os';
 import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { launchMain } from '../src/launch.js';
-import { mainEnvironment, runMain } from '../src/run-main.js';
+import { launchMain } from '../src/launch.ts';
+import { mainEnvironment, runMain } from '../src/run-main.ts';
 
 const execute = promisify(execFile);
-const launchModule = fileURLToPath(new URL('../src/launch.js', import.meta.url));
+const launchModule = fileURLToPath(new URL('../src/launch.ts', import.meta.url));
 
 function fixture(t, { cleanup = true } = {}) {
   const home = mkdtempSync(path.join(tmpdir(), 'captain-launch-'));
@@ -51,7 +51,7 @@ test('launch uses direct argv, absolute helper, exact default tmux, and main ide
   assert.equal(call.args[call.args.indexOf('-c') + 1], workspace);
   assert.equal(call.args.at(-3), process.execPath);
   assert.equal(path.isAbsolute(call.args.at(-2)), true);
-  assert.match(call.args.at(-2), /run-main\.js$/);
+  assert.match(call.args.at(-2), /run-main\.ts$/);
   assert.equal(call.options.cwd, workspace);
   assert.equal(call.options.timeout, 15000);
   assert.equal(call.options.env.TMUX, undefined);

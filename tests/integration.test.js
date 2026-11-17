@@ -6,8 +6,8 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { createPajClient } from '../src/paj.js';
-import { createTaskStore } from '../src/tasks.js';
+import { createPajClient } from '../src/paj.ts';
+import { createTaskStore } from '../src/tasks.ts';
 
 const execute = promisify(execFile);
 

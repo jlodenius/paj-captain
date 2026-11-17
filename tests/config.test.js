@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, lstatSync, mkdtempSync, readFileSync, writeFileSync, statSync, symlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { captainPaths, loadConfig, saveConfig, validateConfig } from '../src/config.js';
+import { captainPaths, loadConfig, saveConfig, validateConfig } from '../src/config.ts';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'captain-config-'));

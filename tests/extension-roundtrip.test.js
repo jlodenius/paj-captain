@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { registerCaptain } from '../src/extension.js';
-import { captainPaths } from '../src/config.js';
+import { registerCaptain } from '../src/extension.ts';
+import { captainPaths } from '../src/config.ts';
 
 const Type = Object.fromEntries(['Object', 'String', 'Optional', 'Array', 'Boolean'].map(name => [name, () => ({})]));
 

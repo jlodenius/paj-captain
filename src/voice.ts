@@ -1,3 +1,17 @@
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { isRecord } from './types.ts';
+
+interface VoiceApi {
+  version: 1;
+  getState: () => unknown;
+  registerReporter: (reporter: { id: string; instructions: string }) => unknown;
+}
+
+function isVoiceApi(value: unknown): value is VoiceApi {
+  return isRecord(value) && value.version === 1 && typeof value.getState === 'function'
+    && typeof value.registerReporter === 'function';
+}
+
 const API_EVENT = 'paj-voice:api:v1';
 const STATE_EVENT = 'paj-voice:state:v1';
 const INSTRUCTIONS = 'While voice is enabled, use voice_speak for concise, meaningful Captain orchestration reports. '
@@ -8,11 +22,11 @@ const INSTRUCTIONS = 'While voice is enabled, use voice_speak for concise, meani
   + 'Keep normal detailed screen answers unchanged. Never send the full response as a speech fallback; '
   + 'the voice runtime enforces the maximum spoken length.';
 
-export function createCaptainVoice(events) {
+export function createCaptainVoice(events: ExtensionAPI['events'] | undefined) {
   let enabled = false;
-  let listening;
-  let api;
-  let unregister;
+  let listening: (() => void) | undefined;
+  let api: VoiceApi | undefined;
+  let unregister: (() => void) | undefined;
   let syncing = false;
 
   const release = () => {
@@ -25,13 +39,12 @@ export function createCaptainVoice(events) {
     if (!enabled || syncing || !events) return;
     syncing = true;
     try {
-      let candidate;
+      let candidate: unknown;
       let querying = true;
       try {
-        events.emit(API_EVENT, { reply(value) { if (querying) candidate = value; } });
+        events.emit(API_EVENT, { reply(value: unknown) { if (querying) candidate = value; } });
       } finally { querying = false; }
-      if (candidate?.version !== 1 || typeof candidate.getState !== 'function'
-        || typeof candidate.registerReporter !== 'function') {
+      if (!isVoiceApi(candidate)) {
         release();
         return;
       }
@@ -40,7 +53,7 @@ export function createCaptainVoice(events) {
       const cleanup = candidate.registerReporter({ id: 'paj-captain', instructions: INSTRUCTIONS });
       if (typeof cleanup !== 'function') return;
       api = candidate;
-      unregister = cleanup;
+      unregister = () => { cleanup(); };
     } catch {
       release();
     } finally { syncing = false; }
@@ -48,7 +61,7 @@ export function createCaptainVoice(events) {
 
   return {
     refresh,
-    setEnabled(next) {
+    setEnabled(next: boolean) {
       enabled = next;
       if (!next) {
         const stop = listening;

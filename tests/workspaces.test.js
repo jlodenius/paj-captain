@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, symlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { resolveWorkspace, listWorkspaces } from '../src/workspaces.js';
+import { resolveWorkspace, listWorkspaces } from '../src/workspaces.ts';
 
 function fixture(t) {
   const home = mkdtempSync(path.join(tmpdir(), 'captain-workspaces-'));

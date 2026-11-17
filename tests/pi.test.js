@@ -7,8 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const rootPackage = fileURLToPath(new URL('../', import.meta.url));
-const pajExtension = process.env.PAJ_CAPTAIN_PAJ_EXTENSION
-  || fileURLToPath(new URL('../../paj/extensions/paj', import.meta.url));
+const pajExtension = process.env.PAJ_CAPTAIN_PAJ_EXTENSION;
 
 function rpc(t, root, withPaj) {
   const agent = join(root, 'a');
@@ -105,7 +104,7 @@ test('real Pi discovers the whole-package link and /captain fails closed without
 });
 
 test('real Pi and Paj support /captain activation, hidden/direct tools, persistent mode and disabling',
-  { skip: !process.env.PAJ_CAPTAIN_PI_BIN, timeout: 30000 }, async t => {
+  { skip: !process.env.PAJ_CAPTAIN_PI_BIN || !pajExtension, timeout: 30000 }, async t => {
   const root = mkdtempSync(join(tmpdir(), 'cpt-'));
   const connection = rpc(t, root, true);
   const commands = await connection.request('get_commands');

@@ -1,30 +1,44 @@
+import type { ExtensionAPI, ExtensionContext, ToolDefinition, compact } from '@earendil-works/pi-coding-agent';
+import type { Type as SchemaType, TSchema, Static } from 'typebox';
+import { errorMessage, isRecord } from './types.ts';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { captainPaths, loadConfig, saveConfig } from './config.js';
-import { createPajClient } from './paj.js';
-import { createTaskStore } from './tasks.js';
-import { listWorkspaces } from './workspaces.js';
-import { launchMain } from './launch.js';
-import { createCaptainVoice } from './voice.js';
-import { cancelCaptainCompaction, carryCaptainFiles, compactCaptain, supportsCaptainCompaction } from './compaction.js';
+import { captainPaths, loadConfig, saveConfig } from './config.ts';
+import { createPajClient } from './paj.ts';
+import { createTaskStore } from './tasks.ts';
+import { listWorkspaces } from './workspaces.ts';
+import { launchMain } from './launch.ts';
+import { createCaptainVoice } from './voice.ts';
+import { cancelCaptainCompaction, carryCaptainFiles, compactCaptain, supportsCaptainCompaction } from './compaction.ts';
 
 const MODE_ENTRY = 'paj-captain-mode';
 const CHILD_TOOLS = ['spawn_sub_agent', 'list_sub_agents', 'assign_subagent_task', 'complete_subagent_task'];
-const SKILL = fileURLToPath(new URL('../skills/paj-captain/SKILL.md', import.meta.url));
-function result(value) {
+const SKILL = fileURLToPath(new URL(import.meta.url.endsWith('.ts')
+  ? '../skills/paj-captain/SKILL.md' : '../../skills/paj-captain/SKILL.md', import.meta.url));
+function result(value: unknown) {
   const text = JSON.stringify(value, null, 2);
   const bytes = Buffer.byteLength(text);
-  if (bytes <= 32768) return { content: [{ type: 'text', text }], details: value };
+  if (bytes <= 32768) return { content: [{ type: 'text' as const, text }], details: value };
   const fullOutputPath = join(mkdtempSync(join(tmpdir(), 'paj-captain-output-')), 'result.json');
   writeFileSync(fullOutputPath, text, { mode: 0o600, flag: 'wx' });
-  return { content: [{ type: 'text', text: `${Buffer.from(text).subarray(0, 24576).toString('utf8')}\n`
+  return { content: [{ type: 'text' as const, text: `${Buffer.from(text).subarray(0, 24576).toString('utf8')}\n`
     + `[Truncated ${bytes} bytes. Full result: ${fullOutputPath}]` }],
   details: { truncated: true, bytes, fullOutputPath } };
 }
 
-export function registerCaptain(pi, Type, options = {}) {
+interface CaptainOptions {
+  paths?: ReturnType<typeof captainPaths>;
+  client?: ReturnType<typeof createPajClient>;
+  createTaskStore?: typeof createTaskStore;
+  listWorkspaces?: typeof listWorkspaces;
+  launchMain?: typeof launchMain;
+  compact?: typeof compact;
+  piVersion?: string;
+}
+
+export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, options: CaptainOptions = {}) {
   const paths = options.paths ?? captainPaths();
   const client = options.client ?? createPajClient();
   const makeStore = options.createTaskStore ?? createTaskStore;
@@ -32,17 +46,17 @@ export function registerCaptain(pi, Type, options = {}) {
   const launch = options.launchMain ?? launchMain;
   let enabled = false;
   const voice = createCaptainVoice(pi.events);
-  let store;
-  let sessionId;
-  let restoredTools = [];
-  const definitions = [];
+  let store: ReturnType<typeof createTaskStore> | undefined;
+  let sessionId: string | undefined;
+  let restoredTools: string[] = [];
+  const definitions: { name: string; expose: (enabled: boolean) => void }[] = [];
   const names = () => definitions.map(tool => tool.name);
-  const identity = ctx => {
+  const identity = (ctx: ExtensionContext) => {
     const id = ctx.sessionManager.getSessionId();
     if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(id)) throw new Error('Invalid Pi session identity');
     return id;
   };
-  const ledger = ctx => {
+  const ledger = (ctx: ExtensionContext) => {
     const id = identity(ctx);
     if (id !== sessionId || !store) {
       store = makeStore(join(paths.stateDir, `${id}.json`));
@@ -50,30 +64,32 @@ export function registerCaptain(pi, Type, options = {}) {
     }
     return store;
   };
-  const active = async ctx => {
+  const active = async (ctx: ExtensionContext) => {
     if (!enabled) throw new Error('Run /captain in a main Paj-enabled Pi session first');
     loadConfig(paths.configFile);
     return client.self(identity(ctx));
   };
-  const refresh = async ctx => {
+  const refresh = async (ctx: ExtensionContext) => {
     const self = await active(ctx);
     ledger(ctx).observe(await client.incoming(self.id));
     return self;
   };
-  const expose = next => {
+  const expose = (next: boolean) => {
     voice.setEnabled(next);
     if (enabled === next) return;
     if (next) restoredTools = pi.getActiveTools().filter(name => CHILD_TOOLS.includes(name));
     enabled = next;
-    for (const definition of definitions) pi.registerTool({ ...definition, exposure: next ? 'direct' : 'hidden' });
+    for (const definition of definitions) definition.expose(next);
     const current = pi.getActiveTools().filter(name => !names().includes(name));
     pi.setActiveTools(next ? [...current.filter(name => !CHILD_TOOLS.includes(name)), ...names()]
       : [...new Set([...current, ...restoredTools])]);
     if (!next) restoredTools = [];
   };
-  const status = ctx => ctx.ui.setStatus('paj-captain', enabled ? 'Captain' : undefined);
-  const add = (name, description, parameters, execute, readOnly = false) => {
-    const definition = { name, label: name.replaceAll('_', ' '), description, parameters,
+  const status = (ctx: ExtensionContext) => ctx.ui.setStatus('paj-captain', enabled ? 'Captain' : undefined);
+  const add = <P extends TSchema>(name: string, description: string, parameters: P,
+    execute: (id: string, params: Static<P>, ctx: ExtensionContext, signal: AbortSignal | undefined) => unknown,
+    readOnly = false) => {
+    const definition: ToolDefinition<P> = { name, label: name.replaceAll('_', ' '), description, parameters,
       annotations: { readOnlyHint: readOnly, destructiveHint: false, openWorldHint: !readOnly },
       async execute(id, params, signal, _onUpdate, ctx) {
         await active(ctx);
@@ -81,8 +97,9 @@ export function registerCaptain(pi, Type, options = {}) {
         if (!enabled) throw new Error('Captain was disabled');
         return result(await execute(id, params, ctx, signal));
       } };
-    definitions.push(definition);
-    pi.registerTool({ ...definition, exposure: 'hidden' });
+    const exposeTool = (next: boolean) => pi.registerTool({ ...definition, exposure: next ? 'direct' : 'hidden' });
+    definitions.push({ name, expose: exposeTool });
+    exposeTool(false);
   };
 
   add('captain_agents', 'List live MAIN Paj agents across all workspaces, excluding this Captain.',
@@ -111,7 +128,7 @@ export function registerCaptain(pi, Type, options = {}) {
           text: params.assignment, kind: 'request', taskId: task.id });
         return ledger(ctx).markSent(task.id, message);
       } catch (error) {
-        return ledger(ctx).markUnknown(task.id, error.message);
+        return ledger(ctx).markUnknown(task.id, errorMessage(error));
       }
     });
 
@@ -136,11 +153,12 @@ export function registerCaptain(pi, Type, options = {}) {
       if (intent.reused) return intent;
       try {
         const task = tasks.get(params.taskId);
+        if (!task) throw new Error('Unknown Captain assignment');
         const message = await client.send({ from: self.id, recipient: task.target.id,
           text: params.answer, kind: 'answer', taskId: task.id, inReplyTo: params.questionId });
         return tasks.recordReply(task.id, { questionId: params.questionId, message });
       } catch (error) {
-        return tasks.markReplyUnknown(params.taskId, { questionId: params.questionId, error: error.message });
+        return tasks.markReplyUnknown(params.taskId, { questionId: params.questionId, error: errorMessage(error) });
       }
     });
 
@@ -153,25 +171,28 @@ export function registerCaptain(pi, Type, options = {}) {
         if (params.allow !== undefined) config.workspaces.allow = params.allow;
         if (params.exclude !== undefined) config.workspaces.exclude = params.exclude;
         if (params.progress !== undefined) config.reporting.progress = params.progress;
-        if (params.verbosity !== undefined) config.reporting.verbosity = params.verbosity;
+        if (params.verbosity !== undefined) {
+          if (params.verbosity !== 'brief' && params.verbosity !== 'detailed') throw new Error('Invalid verbosity');
+          config.reporting.verbosity = params.verbosity;
+        }
         saveConfig(paths.configFile, config);
       }
       return { path: paths.configFile, ...config };
     });
 
-  const restore = async (_event, ctx) => {
+  const restore = async (_event: unknown, ctx: ExtensionContext) => {
     expose(false);
     store = undefined;
     sessionId = undefined;
     const entry = [...ctx.sessionManager.getBranch()].reverse()
       .find(item => item.type === 'custom' && item.customType === MODE_ENTRY);
-    if (entry?.data?.enabled === true) {
+    if (entry?.type === 'custom' && isRecord(entry.data) && entry.data.enabled === true) {
       try {
         loadConfig(paths.configFile);
         await client.self(identity(ctx));
         ledger(ctx);
         expose(true);
-      } catch (error) { ctx.ui.notify(`Captain unavailable: ${error.message}`, 'warning'); }
+      } catch (error) { ctx.ui.notify(`Captain unavailable: ${errorMessage(error)}`, 'warning'); }
     }
     status(ctx);
   };
@@ -184,8 +205,8 @@ export function registerCaptain(pi, Type, options = {}) {
     if (!enabled) return;
     if (CHILD_TOOLS.includes(event.toolName)) return { block: true, reason: 'Captain delegates to main agents; their subagents are their responsibility' };
     if (event.toolName === 'inspect_agent') {
-      try { await client.resolveMain(event.input.recipient, identity(ctx)); }
-      catch (error) { return { block: true, reason: error.message }; }
+      try { await client.resolveMain(typeof event.input.recipient === 'string' ? event.input.recipient : '', identity(ctx)); }
+      catch (error) { return { block: true, reason: errorMessage(error) }; }
     }
     if (event.toolName === 'send_agent_message') {
       if (!event.input.kind || event.input.kind === 'request') {
@@ -195,8 +216,8 @@ export function registerCaptain(pi, Type, options = {}) {
         task.questions.some(question => question.id === event.input.inReplyTo))) {
         return { block: true, reason: 'Use captain_reply for tracked worker questions' };
       }
-      try { await client.resolveMain(event.input.recipient, identity(ctx)); }
-      catch (error) { return { block: true, reason: error.message }; }
+      try { await client.resolveMain(typeof event.input.recipient === 'string' ? event.input.recipient : '', identity(ctx)); }
+      catch (error) { return { block: true, reason: errorMessage(error) }; }
     }
   });
 
@@ -228,12 +249,12 @@ export function registerCaptain(pi, Type, options = {}) {
         + `${JSON.stringify(paths.configFile)} before coordinating work. Do not launch or delegate around the failed checks.` };
     }
     if (event.messageType === 'custom' && event.message?.customType === 'paj-messages'
-      && Array.isArray(event.message.details?.messages)) {
+      && isRecord(event.message.details) && Array.isArray(event.message.details.messages)) {
       try { ledger(ctx).observe(event.message.details.messages); } catch {}
     }
     let freshness = 'Paj messages refreshed.';
     try { await refresh(ctx); } catch { freshness = 'Paj refresh failed; report task state as last known, not current.'; }
-    let tasks = [];
+    let tasks: { id: string; status: string; target: string }[] = [];
     try { tasks = ledger(ctx).list().slice(-30).map(task => ({ id: task.id, status: task.status, target: task.target.id })); }
     catch { freshness = 'Captain ledger unavailable. Report this problem; never repeat uncertain assignments.'; }
     return { systemPrompt: `${event.systemPrompt}\n\nYou are Captain, this session's main-agent coordinator.\n`
@@ -276,7 +297,7 @@ export function registerCaptain(pi, Type, options = {}) {
           await refresh(ctx);
           ctx.ui.notify(JSON.stringify(ledger(ctx).list(), null, 2), 'info');
         } else ctx.ui.notify('Usage: /captain [on|off|status|settings|tasks]', 'warning');
-      } catch (error) { ctx.ui.notify(`Captain: ${error.message}`, 'error'); }
+      } catch (error) { ctx.ui.notify(`Captain: ${errorMessage(error)}`, 'error'); }
     },
   });
 }

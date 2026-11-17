@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { createTaskStore } from '../src/tasks.js';
+import { createTaskStore } from '../src/tasks.ts';
 
 const owner = '11111111-1111-4111-8111-111111111111';
 const worker = '22222222-2222-4222-8222-222222222222';
@@ -338,7 +338,7 @@ test('SIGKILL while holding a real transaction releases flock and preserves dura
   const { store, file, dir } = fixture(t);
   const task = store.begin(input);
   const marker = path.join(dir, 'transaction-held');
-  const module = fileURLToPath(new URL('../src/tasks.js', import.meta.url));
+  const module = fileURLToPath(new URL('../src/tasks.ts', import.meta.url));
   const script = `import fs from 'node:fs';import {createTaskStore} from ${JSON.stringify(module)};`
     + `const store=createTaskStore(${JSON.stringify(file)},{now(){`
     + `fs.writeFileSync(${JSON.stringify(marker)},'held');`

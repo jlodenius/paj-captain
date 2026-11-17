@@ -101,10 +101,16 @@ Without a compatible voice addon, Captain remains text-only.
 
 ## Development
 
+Maintained source is TypeScript. Installs build JavaScript in `dist` so Node can run the launcher
+inside any package location; Home Manager builds the same output without npm downloads.
+
 ```sh
+npm install
+npm run typecheck
 npm test
-PI_OFFLINE=1 PAJ_CAPTAIN_PI_BIN=$(command -v pi) PAJ_CAPTAIN_PAJ_BIN=$(command -v paj) npm test
 ```
 
-Integration tests use isolated state and local fake model providers. They expect a sibling Paj
-checkout; set `PAJ_CAPTAIN_PAJ_EXTENSION` to its extension path otherwise.
+`npm install` builds `dist`; run `npm run build` after source changes. Optional integration tests
+use isolated state and local fake providers. Set `PAJ_CAPTAIN_PI_BIN`, `PAJ_CAPTAIN_PAJ_BIN`, and
+`PAJ_CAPTAIN_PAJ_EXTENSION` explicitly to test Pi/Paj; set `PAJ_CAPTAIN_VOICE_DIR` to test voice.
+No sibling checkout is assumed.
