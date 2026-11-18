@@ -170,6 +170,7 @@ test('query, incompatible APIs, registration and cleanup failures never break Ca
 });
 
 function extensionFixture(t, events) {
+  events.on('paj:captain-inspection:v1', request => request.reply(Promise.resolve()));
   const root = mkdtempSync(join(tmpdir(), 'captain-voice-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const handlers = new Map();

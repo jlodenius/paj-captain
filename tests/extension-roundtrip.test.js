@@ -21,7 +21,11 @@ function fixture(t, failAnswers = false) {
   const handlers = new Map();
   const commands = new Map();
   let selected = [];
-  const pi = { registerTool: tool => tools.set(tool.name, tool), on: (name, handler) => handlers.set(name, handler),
+  const pi = { events: { emit: (name, request) => {
+    assert.equal(name, 'paj:captain-inspection:v1');
+    assert.equal(request.piSessionId, owner.piSessionId);
+    request.reply(Promise.resolve());
+  } }, registerTool: tool => tools.set(tool.name, tool), on: (name, handler) => handlers.set(name, handler),
     getActiveTools: () => selected, setActiveTools: names => { selected = names; },
     registerCommand: (name, command) => commands.set(name, command), appendEntry() {} };
   const ctx = { cwd: root, ui: { setStatus() {}, notify() {} }, waitForIdle: async () => {},

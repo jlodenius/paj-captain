@@ -11,10 +11,10 @@ import { createTaskStore } from './tasks.ts';
 import { listWorkspaces } from './workspaces.ts';
 import { launchMain } from './launch.ts';
 import { createCaptainVoice } from './voice.ts';
+import { setCaptainInspection } from './inspection.ts';
 import { cancelCaptainCompaction, carryCaptainFiles, compactCaptain, supportsCaptainCompaction } from './compaction.ts';
 
 const MODE_ENTRY = 'paj-captain-mode';
-const INSPECTION_EVENT = 'paj:captain-inspection';
 const CHILD_TOOLS = ['spawn_sub_agent', 'list_sub_agents', 'assign_subagent_task', 'complete_subagent_task'];
 const SKILL = fileURLToPath(new URL(import.meta.url.endsWith('.ts')
   ? '../skills/paj-captain/SKILL.md' : '../../skills/paj-captain/SKILL.md', import.meta.url));
@@ -88,7 +88,6 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
         : [...new Set([...current, ...restoredTools])]);
       if (!next) restoredTools = [];
     }
-    pi.events?.emit(INSPECTION_EVENT, { enabled: next });
   };
   const status = (ctx: ExtensionContext) => ctx.ui.setStatus('paj-captain', enabled ? 'Captain' : undefined);
   const add = <P extends TSchema>(name: string, description: string, parameters: P,
@@ -185,11 +184,16 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
       return { path: paths.configFile, ...config };
     });
 
-  const reset = (_event: unknown, ctx: ExtensionContext) => {
+  const reset = async (_event: unknown, ctx: ExtensionContext) => {
+    const wasEnabled = enabled;
     expose(false);
     store = undefined;
     sessionId = undefined;
     status(ctx);
+    try { await setCaptainInspection(pi.events, identity(ctx), false); }
+    catch (error) {
+      if (wasEnabled) ctx.ui.notify(`Captain revocation failed: ${errorMessage(error)}`, 'error');
+    }
   };
   pi.on('session_start', reset);
   pi.on('session_tree', reset);
@@ -274,20 +278,32 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
         const action = args.trim() || 'on';
         if (action === 'off') {
           expose(false);
-          pi.appendEntry(MODE_ENTRY, { version: 1, enabled: false });
           status(ctx);
+          await setCaptainInspection(pi.events, identity(ctx), false);
+          pi.appendEntry(MODE_ENTRY, { version: 1, enabled: false });
           ctx.ui.notify('Captain disabled. Launched main agents keep running.', 'info');
         } else if (action === 'on') {
-          const activation = ++generation;
+          if (enabled) return;
+          expose(false);
+          const activation = generation;
           const id = identity(ctx);
+          await setCaptainInspection(pi.events, id, false);
+          if (activation !== generation || identity(ctx) !== id) return;
           await ctx.waitForIdle();
           if (activation !== generation || identity(ctx) !== id) return;
           loadConfig(paths.configFile);
           await client.self(id);
           if (activation !== generation || identity(ctx) !== id) return;
           ledger(ctx);
-          try { expose(true); } catch (error) {
-            expose(false);
+          try {
+            await setCaptainInspection(pi.events, id, true);
+            if (activation !== generation || identity(ctx) !== id) return;
+            expose(true);
+          } catch (error) {
+            if (activation === generation && identity(ctx) === id) {
+              expose(false);
+              try { await setCaptainInspection(pi.events, id, false); } catch {}
+            }
             throw error;
           }
           pi.appendEntry(MODE_ENTRY, { version: 1, enabled: true });

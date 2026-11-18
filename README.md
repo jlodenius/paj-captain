@@ -79,8 +79,9 @@ continue to use regular subagents. Workers run independently in normal tmux sess
 when Captain exits.
 
 With compatible Paj, Captain can observe mains and their children; it directs children through their
-owning main. Observation permission is published through Pi's `paj:captain-inspection` event with
-`{ enabled: boolean }`; Paj authenticates the live main and enforces inspection access.
+owning main. Captain requires Paj's `paj:captain-inspection:v1` handshake:
+`{ enabled, piSessionId, reply }`. Paj replies synchronously with a registry-update promise; Captain
+awaits it before activation or completing revocation. Missing or rejected permission fails closed.
 
 Use `/captain status`, `/captain settings`, and `/captain tasks` to inspect state.
 `/captain off` restores ordinary mode without stopping workers. Captain always starts OFF after

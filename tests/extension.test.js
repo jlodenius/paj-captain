@@ -39,7 +39,12 @@ function fixture(t, overrides = {}) {
     ...overrides.client,
   };
   const pi = {
-    events: { emit: (name, data) => { if (name === 'paj:captain-inspection') inspection.push(data); } },
+    events: { emit: (name, data) => {
+      if (name !== 'paj:captain-inspection:v1') return;
+      inspection.push({ enabled: data.enabled });
+      assert.equal(data.piSessionId, ctx.sessionManager.getSessionId());
+      data.reply(Promise.resolve());
+    } },
     registerTool: tool => { tools.set(tool.name, tool); if (tool.exposure === 'direct') active = [...new Set([...active, tool.name])]; },
     getActiveTools: () => active,
     setActiveTools: names => { active = names; },
@@ -207,16 +212,108 @@ test('activation requires a live main Paj identity and reports failure without e
 test('failed inspection publication rolls activation back to ordinary mode', async t => {
   const f = fixture(t);
   f.pi.events.emit = (name, data) => {
-    assert.equal(name, 'paj:captain-inspection');
-    f.inspection.push(data);
-    if (data.enabled) throw new Error('Inspection publication failed');
+    assert.equal(name, 'paj:captain-inspection:v1');
+    f.inspection.push({ enabled: data.enabled });
+    data.reply(data.enabled ? Promise.reject(new Error('Inspection publication failed')) : Promise.resolve());
   };
   await f.command('on');
-  assert.deepEqual(f.inspection, [{ enabled: true }, { enabled: false }]);
+  assert.deepEqual(f.inspection, [{ enabled: false }, { enabled: true }, { enabled: false }]);
   assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
   assert.ok(f.pi.getActiveTools().includes('spawn_sub_agent'));
   assert.equal(f.entries.length, 0);
   assert.match(f.notices.at(-1)[0], /Inspection publication failed/);
+});
+
+test('tool activation failure revokes the acknowledged registry grant', async t => {
+  const f = fixture(t);
+  const registerTool = f.pi.registerTool;
+  f.pi.registerTool = tool => {
+    if (tool.exposure === 'direct') throw new Error('Tool activation failed');
+    registerTool(tool);
+  };
+  await f.command('on');
+  assert.deepEqual(f.inspection, [{ enabled: false }, { enabled: true }, { enabled: false }]);
+  assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
+  assert.match(f.notices.at(-1)[0], /Tool activation failed/);
+});
+
+test('missing Paj receiver cannot enable Captain', async t => {
+  const f = fixture(t);
+  f.pi.events.emit = () => {};
+  await f.command('on');
+  assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
+  assert.equal(f.entries.length, 0);
+  assert.match(f.notices.at(-1)[0], /compatible live Paj receiver/);
+});
+
+test('late activation acknowledgement cannot enable after lifecycle revocation', async t => {
+  for (const boundary of ['session_shutdown', 'session_tree', 'off']) {
+    const f = fixture(t);
+    let acknowledge;
+    let requested;
+    const request = new Promise(resolve => { requested = resolve; });
+    const enabled = new Promise(resolve => { acknowledge = resolve; });
+    const calls = [];
+    f.pi.events.emit = (_name, data) => {
+      calls.push(data.enabled);
+      data.reply(data.enabled ? enabled : Promise.resolve());
+      if (data.enabled) requested();
+    };
+    const activation = f.command('on');
+    await request;
+    assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
+    if (boundary === 'off') await f.command('off');
+    else await f.event(boundary);
+    acknowledge();
+    await activation;
+    assert.deepEqual(calls, [false, true, false]);
+    assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
+  }
+});
+
+test('a superseding failed activation revokes the previous pending grant', async t => {
+  let checks = 0;
+  const f = fixture(t, { client: { self: async () => {
+    if (++checks > 1) throw new Error('Main registration disappeared');
+    return self;
+  } } });
+  let acknowledge;
+  let requested;
+  let registryEnabled = false;
+  let pending = Promise.resolve();
+  const grantRequested = new Promise(resolve => { requested = resolve; });
+  const grant = new Promise(resolve => { acknowledge = resolve; });
+  f.pi.events.emit = (_name, data) => {
+    pending = pending.then(async () => {
+      if (data.enabled) { requested(); await grant; }
+      registryEnabled = data.enabled;
+    });
+    data.reply(pending);
+  };
+  const first = f.command('on');
+  await grantRequested;
+  const second = f.command('on');
+  acknowledge();
+  await Promise.all([first, second]);
+  assert.equal(registryEnabled, false);
+  assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
+  assert.match(f.notices.at(-1)[0], /Main registration disappeared/);
+});
+
+test('off waits for registry revocation while immediately disabling Captain tools', async t => {
+  const f = fixture(t);
+  await f.command('on');
+  let acknowledge;
+  let settled = false;
+  const revoked = new Promise(resolve => { acknowledge = resolve; });
+  f.pi.events.emit = (_name, data) => data.reply(revoked);
+  const off = f.command('off').then(() => { settled = true; });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
+  acknowledge();
+  await off;
+  assert.equal(settled, true);
 });
 
 test('all lifecycle boundaries revoke Captain inspection and never restore historical mode', async t => {
