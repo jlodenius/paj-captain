@@ -21,7 +21,7 @@ stdenvNoCC.mkDerivation {
   doCheck = true;
   checkPhase = ''
     runHook preCheck
-    node --test tests/*.test.js
+    node --test tests/*.test.js tests/*.test.ts
     runHook postCheck
   '';
   installPhase = ''
