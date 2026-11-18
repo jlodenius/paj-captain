@@ -103,7 +103,7 @@ test('real Pi discovers the whole-package link and /captain fails closed without
   assert.ok(!after.active.includes('captain_delegate'));
 });
 
-test('real Pi and Paj support /captain activation, hidden/direct tools, persistent mode and disabling',
+test('real Pi and Paj support /captain activation, hidden/direct tools, OFF after reload and disabling',
   { skip: !process.env.PAJ_CAPTAIN_PI_BIN || !pajExtension, timeout: 30000 }, async t => {
   const root = mkdtempSync(join(tmpdir(), 'cpt-'));
   const connection = rpc(t, root, true);
@@ -119,7 +119,8 @@ test('real Pi and Paj support /captain activation, hidden/direct tools, persiste
   assert.ok(active.branch.some(entry => entry.customType === 'paj-captain-mode' && entry.data.enabled));
   await connection.command('/captain-test-reload');
   const reloaded = JSON.parse((await connection.command('/captain-inspect')).at(-1).message);
-  assert.ok(reloaded.active.includes('captain_delegate'));
+  assert.ok(!reloaded.active.includes('captain_delegate'));
+  await connection.command('/captain');
   await connection.command('/captain off');
   const inactive = JSON.parse((await connection.command('/captain-inspect')).at(-1).message);
   assert.ok(!inactive.active.includes('captain_delegate'));

@@ -192,7 +192,7 @@ function extensionFixture(t, events) {
     event: (name, event = {}) => handlers.get(name)(event, ctx), pi, ctx };
 }
 
-test('Captain lifecycle enables, disables, restores, reloads and shuts down its reporter', async t => {
+test('Captain lifecycle requires explicit reactivation after reload and shuts down its reporter', async t => {
   const events = bus();
   const voice = voiceAddon(events);
   const f = extensionFixture(t, events);
@@ -214,6 +214,9 @@ test('Captain lifecycle enables, disables, restores, reloads and shuts down its 
   assert.equal(events.count(STATE_EVENT), 0);
   f.load();
   await f.event('session_start', { reason: 'reload' });
+  assert.equal(voice.registrations.length, 2);
+  assert.equal(events.count(STATE_EVENT), 0);
+  await f.command('on');
   assert.equal(voice.registrations.length, 3);
   assert.equal(events.count(STATE_EVENT), 1);
   f.entries.length = 0;

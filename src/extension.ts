@@ -14,6 +14,7 @@ import { createCaptainVoice } from './voice.ts';
 import { cancelCaptainCompaction, carryCaptainFiles, compactCaptain, supportsCaptainCompaction } from './compaction.ts';
 
 const MODE_ENTRY = 'paj-captain-mode';
+const INSPECTION_EVENT = 'paj:captain-inspection';
 const CHILD_TOOLS = ['spawn_sub_agent', 'list_sub_agents', 'assign_subagent_task', 'complete_subagent_task'];
 const SKILL = fileURLToPath(new URL(import.meta.url.endsWith('.ts')
   ? '../skills/paj-captain/SKILL.md' : '../../skills/paj-captain/SKILL.md', import.meta.url));
@@ -45,6 +46,7 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
   const workspaces = options.listWorkspaces ?? listWorkspaces;
   const launch = options.launchMain ?? launchMain;
   let enabled = false;
+  let generation = 0;
   const voice = createCaptainVoice(pi.events);
   let store: ReturnType<typeof createTaskStore> | undefined;
   let sessionId: string | undefined;
@@ -75,15 +77,18 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
     return self;
   };
   const expose = (next: boolean) => {
+    if (!next) generation++;
     voice.setEnabled(next);
-    if (enabled === next) return;
-    if (next) restoredTools = pi.getActiveTools().filter(name => CHILD_TOOLS.includes(name));
-    enabled = next;
-    for (const definition of definitions) definition.expose(next);
-    const current = pi.getActiveTools().filter(name => !names().includes(name));
-    pi.setActiveTools(next ? [...current.filter(name => !CHILD_TOOLS.includes(name)), ...names()]
-      : [...new Set([...current, ...restoredTools])]);
-    if (!next) restoredTools = [];
+    if (enabled !== next) {
+      if (next) restoredTools = pi.getActiveTools().filter(name => CHILD_TOOLS.includes(name));
+      enabled = next;
+      for (const definition of definitions) definition.expose(next);
+      const current = pi.getActiveTools().filter(name => !names().includes(name));
+      pi.setActiveTools(next ? [...current.filter(name => !CHILD_TOOLS.includes(name)), ...names()]
+        : [...new Set([...current, ...restoredTools])]);
+      if (!next) restoredTools = [];
+    }
+    pi.events?.emit(INSPECTION_EVENT, { enabled: next });
   };
   const status = (ctx: ExtensionContext) => ctx.ui.setStatus('paj-captain', enabled ? 'Captain' : undefined);
   const add = <P extends TSchema>(name: string, description: string, parameters: P,
@@ -102,18 +107,18 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
     exposeTool(false);
   };
 
-  add('captain_agents', 'List live MAIN Paj agents across all workspaces, excluding this Captain.',
+  add('captain_agents', 'Find existing relevant MAIN Paj agents across all workspaces, including busy agents, before considering a launch. Excludes this Captain.',
     Type.Object({}), (_id, _params, ctx) => client.listMain(identity(ctx)), true);
 
   add('captain_workspaces', 'List configured launch workspaces. The list is bounded; an explicit path is checked again at launch.',
     Type.Object({}), () => workspaces(loadConfig(paths.configFile).workspaces), true);
 
-  add('captain_start_agent', 'Launch an independent main Pi/Paj agent in an allowed existing workspace, in a separate normal tmux session. Registration or project trust may require attachment; launched does not mean ready. Never retry an uncertain launch automatically.',
+  add('captain_start_agent', 'Only when no relevant existing MAIN agent exists, launch an independent main Pi/Paj agent in an allowed existing workspace, in a separate normal tmux session. Registration or project trust may require attachment; launched does not mean ready. Never retry an uncertain launch automatically.',
     Type.Object({ workspace: Type.String(), name: Type.Optional(Type.String()), model: Type.Optional(Type.String()) }),
     (id, params, ctx) => launch({ ...params, requestId: `${identity(ctx)}:${id}` },
       loadConfig(paths.configFile).workspaces, { base: ctx.cwd }));
 
-  add('captain_delegate', 'Delegate one finite assignment to an exact main agent. Include outcome, context, constraints and completion condition. Persists intent before sending; queued is NOT started. Never retry unknown delivery automatically.',
+  add('captain_delegate', 'Delegate one finite assignment to an exact main agent. Include outcome, context, constraints and completion condition. The responsible main must arrange its OWN regular subagent reviews, resolve findings, and report checks and caveats. Persists intent before sending; queued is NOT started. Never retry unknown delivery automatically.',
     Type.Object({ recipient: Type.String(), assignment: Type.String({ minLength: 1, maxLength: 16384 }) }),
     async (requestId, params, ctx, signal) => {
       const self = await active(ctx);
@@ -180,34 +185,20 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
       return { path: paths.configFile, ...config };
     });
 
-  const restore = async (_event: unknown, ctx: ExtensionContext) => {
+  const reset = (_event: unknown, ctx: ExtensionContext) => {
     expose(false);
     store = undefined;
     sessionId = undefined;
-    const entry = [...ctx.sessionManager.getBranch()].reverse()
-      .find(item => item.type === 'custom' && item.customType === MODE_ENTRY);
-    if (entry?.type === 'custom' && isRecord(entry.data) && entry.data.enabled === true) {
-      try {
-        loadConfig(paths.configFile);
-        await client.self(identity(ctx));
-        ledger(ctx);
-        expose(true);
-      } catch (error) { ctx.ui.notify(`Captain unavailable: ${errorMessage(error)}`, 'warning'); }
-    }
     status(ctx);
   };
-  pi.on('session_start', restore);
-  pi.on('session_tree', restore);
-  pi.on('session_shutdown', () => { expose(false); store = undefined; sessionId = undefined; });
+  pi.on('session_start', reset);
+  pi.on('session_tree', reset);
+  pi.on('session_shutdown', reset);
 
   pi.on('tool_call', async (event, ctx) => {
     if (names().includes(event.toolName) && !enabled) return { block: true, reason: 'Captain is disabled' };
     if (!enabled) return;
     if (CHILD_TOOLS.includes(event.toolName)) return { block: true, reason: 'Captain delegates to main agents; their subagents are their responsibility' };
-    if (event.toolName === 'inspect_agent') {
-      try { await client.resolveMain(typeof event.input.recipient === 'string' ? event.input.recipient : '', identity(ctx)); }
-      catch (error) { return { block: true, reason: errorMessage(error) }; }
-    }
     if (event.toolName === 'send_agent_message') {
       if (!event.input.kind || event.input.kind === 'request') {
         return { block: true, reason: 'Use captain_delegate for tracked main-agent assignments' };
@@ -261,9 +252,13 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
       + `Read the complete ${JSON.stringify(SKILL)} skill before orchestrating work. `
       + 'After compaction, read it again even if you read it earlier in the session. '
       + 'Consult captain_tasks for current assignment details. Preserve user and repository instructions.\n'
-      + 'Use Captain tools for launch, assignments, questions and settings. Coordinate MAIN agents, not their subagents.\n'
+      + 'Do almost no project work yourself: route implementation, investigation and review to responsible MAIN agents. '
+      + 'Use relevant existing MAIN agents first, even when busy; launch a new main only when none exists. '
+      + 'Ordinary mains use regular subagents. Require each responsible main to arrange its OWN regular subagent reviews, '
+      + 'resolve findings and report checks and caveats. Use Captain tools for launch, assignments, questions and settings.\n'
       + (pi.getActiveTools().includes('inspect_agent')
-        ? 'For progress, consult tracked reports then use Paj inspect_agent on the main agent before asking a status question. Inspection is evidence, not completion.\n'
+        ? 'For progress, consult tracked reports then use Paj inspect_agent on mains or their children before asking a status question. '
+          + 'Child observation requires Paj Captain permission; direct all instructions through the owning main. Inspection is evidence, not completion.\n'
         : 'Live inspection is unavailable in this tool set. Use tracked reports; ask a worker only when necessary and report missing evidence honestly.\n')
       + 'Act on clear user requests; clarify ambiguous targets or material scope. Preserve actual constraints without inventing new ones.\n'
       + 'Launch checks are mandatory tool policy, not a sandbox. Use captain_start_agent rather than bypassing checks through the shell.\n'
@@ -283,11 +278,18 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
           status(ctx);
           ctx.ui.notify('Captain disabled. Launched main agents keep running.', 'info');
         } else if (action === 'on') {
+          const activation = ++generation;
+          const id = identity(ctx);
           await ctx.waitForIdle();
+          if (activation !== generation || identity(ctx) !== id) return;
           loadConfig(paths.configFile);
-          await client.self(identity(ctx));
+          await client.self(id);
+          if (activation !== generation || identity(ctx) !== id) return;
           ledger(ctx);
-          expose(true);
+          try { expose(true); } catch (error) {
+            expose(false);
+            throw error;
+          }
           pi.appendEntry(MODE_ENTRY, { version: 1, enabled: true });
           status(ctx);
           ctx.ui.notify('Captain enabled in this session. Use /captain settings to inspect launch permissions.', 'info');

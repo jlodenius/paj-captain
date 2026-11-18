@@ -286,7 +286,7 @@ test('real Pi ordinary sessions keep stock compaction without Captain activation
     assert.deepEqual(f.ledgerFiles(), []);
   });
 
-test('real Pi persists guided manual and repeated compactions, restores mode on reload, and leaves off stock',
+test('real Pi persists guided manual and repeated compactions, requires activation after reload, and leaves off stock',
   realPi, async t => {
     const f = await fixture(t);
     await f.enable();
@@ -298,6 +298,7 @@ test('real Pi persists guided manual and repeated compactions, restores mode on 
     assert.equal(f.requests.length, 1, 'No post-summary rewrite call');
     assertGuided(f.requests, focus);
     await f.command('/compaction-test-reload');
+    await f.enable();
     await f.prompt('Continue the discussion only. '.repeat(160));
     const resumedSystem = JSON.stringify(f.requests.at(-1).payload.messages
       .filter(message => ['system', 'developer'].includes(message.role)));

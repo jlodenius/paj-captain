@@ -23,6 +23,7 @@ function fixture(t, overrides = {}) {
   const calls = [];
   const entries = [];
   const notices = [];
+  const inspection = [];
   const handlers = new Map();
   const tools = new Map();
   const commands = new Map();
@@ -38,6 +39,7 @@ function fixture(t, overrides = {}) {
     ...overrides.client,
   };
   const pi = {
+    events: { emit: (name, data) => { if (name === 'paj:captain-inspection') inspection.push(data); } },
     registerTool: tool => { tools.set(tool.name, tool); if (tool.exposure === 'direct') active = [...new Set([...active, tool.name])]; },
     getActiveTools: () => active,
     setActiveTools: names => { active = names; },
@@ -48,7 +50,7 @@ function fixture(t, overrides = {}) {
   const ctx = { cwd: root, sessionManager: { getSessionId: () => ownPiId, getBranch: () => entries },
     ui: { setStatus() {}, notify: (...args) => notices.push(args) }, waitForIdle: async () => {} };
   registerCaptain(pi, Type, { piVersion: '1.5.2', ...overrides, paths, client });
-  return { root, paths, client, calls, entries, notices, handlers, tools, pi, ctx,
+  return { root, paths, client, calls, entries, notices, inspection, handlers, tools, pi, ctx,
     command: args => commands.get('captain').handler(args, ctx),
     tool: (name, params = {}, id = 'tool-call') => tools.get(name).execute(id, params, undefined, undefined, ctx),
     event: (name, event = {}) => handlers.get(name)(event, ctx) };
@@ -89,11 +91,12 @@ test('compaction stays stock while dormant, after disabling, and in a new sessio
   assert.equal(calls, 1);
 });
 
-test('reloaded Captain retains the compaction hook and preserves result metadata', async t => {
+test('explicitly reactivated Captain retains the compaction hook and preserves result metadata', async t => {
   const f = fixture(t, { compact: async preparation => compactResult(preparation) });
   compactionContext(f);
   await f.command('on');
   await f.event('session_start');
+  await f.command('on');
   const result = await f.event('session_before_compact', compactionEvent(f.entries));
   assert.equal(result.compaction.summary, 'Reviewed summary');
   assert.deepEqual(result.compaction.usage, { totalTokens: 10 });
@@ -179,6 +182,11 @@ test('/captain activates only this session and preserves the existing system pro
   const prompt = await f.event('before_agent_start', { systemPrompt: 'Original repository instructions' });
   assert.ok(prompt.systemPrompt.startsWith('Original repository instructions\n'));
   assert.match(prompt.systemPrompt, /MAIN agents/);
+  assert.match(prompt.systemPrompt, /almost no project work/);
+  assert.match(prompt.systemPrompt, /even when busy/);
+  assert.match(prompt.systemPrompt, /OWN regular subagent reviews/);
+  assert.match(f.tools.get('captain_start_agent').description, /Only when no relevant existing MAIN/);
+  assert.match(f.tools.get('captain_delegate').description, /resolve findings/);
   assert.match(prompt.systemPrompt, /keep routine progress quiet/);
   assert.equal(f.entries.at(-1).data.enabled, true);
   await f.command('off');
@@ -192,17 +200,64 @@ test('activation requires a live main Paj identity and reports failure without e
   await f.command('');
   assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
   assert.equal(f.entries.length, 0);
+  assert.ok(!f.inspection.some(data => data.enabled));
   assert.match(f.notices.at(-1)[0], /Paj is not available/);
 });
 
-test('Captain mode restores on reload and active-branch navigation can disable it', async t => {
+test('failed inspection publication rolls activation back to ordinary mode', async t => {
   const f = fixture(t);
+  f.pi.events.emit = (name, data) => {
+    assert.equal(name, 'paj:captain-inspection');
+    f.inspection.push(data);
+    if (data.enabled) throw new Error('Inspection publication failed');
+  };
   await f.command('on');
-  await f.event('session_start');
-  assert.ok(f.pi.getActiveTools().includes('captain_agents'));
-  f.entries.length = 0;
+  assert.deepEqual(f.inspection, [{ enabled: true }, { enabled: false }]);
+  assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
+  assert.ok(f.pi.getActiveTools().includes('spawn_sub_agent'));
+  assert.equal(f.entries.length, 0);
+  assert.match(f.notices.at(-1)[0], /Inspection publication failed/);
+});
+
+test('all lifecycle boundaries revoke Captain inspection and never restore historical mode', async t => {
+  const f = fixture(t);
+  for (const reason of ['startup', 'reload', 'new', 'resume', 'fork']) {
+    await f.command('on');
+    assert.deepEqual(f.inspection.at(-1), { enabled: true });
+    await f.event('session_shutdown', { reason });
+    assert.deepEqual(f.inspection.at(-1), { enabled: false });
+    await f.event('session_start', { reason });
+    assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
+    assert.deepEqual(f.inspection.at(-1), { enabled: false });
+    assert.equal(await f.event('before_agent_start', { systemPrompt: 'Original' }), undefined);
+  }
+  await f.command('on');
   await f.event('session_tree');
   assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
+  assert.deepEqual(f.inspection.at(-1), { enabled: false });
+  assert.ok(f.entries.some(entry => entry.data.enabled));
+  assert.ok(!f.tools.has('captain_mode'));
+});
+
+test('pending activation cannot outlive off, shutdown, navigation or a changed session', async t => {
+  for (const boundary of ['off', 'session_shutdown', 'session_tree', 'identity']) {
+    let resolve;
+    let checking;
+    const checked = new Promise(done => { checking = done; });
+    const f = fixture(t, { client: { self: () => {
+      checking();
+      return new Promise(done => { resolve = done; });
+    } } });
+    const activation = f.command('on');
+    await checked;
+    if (boundary === 'off') await f.command('off');
+    else if (boundary === 'identity') f.ctx.sessionManager.getSessionId = () => 'different-session';
+    else await f.event(boundary);
+    resolve(self);
+    await activation;
+    assert.ok(!f.inspection.some(data => data.enabled), boundary);
+    assert.ok(!f.pi.getActiveTools().includes('captain_agents'), boundary);
+  }
 });
 
 test('subagent tools and untracked requests are blocked while main-only questions remain possible', async t => {
@@ -214,14 +269,17 @@ test('subagent tools and untracked requests are blocked while main-only question
   assert.equal((await f.event('tool_call', { toolName: 'send_agent_message', input: { recipient: 'child', kind: 'question' } })).block, true);
 });
 
-test('shared Paj inspection is preferred when available and Captain restricts it to main agents', async t => {
+test('shared Paj inspection authorizes child observation while messaging remains main-only', async t => {
   const f = fixture(t);
   f.pi.setActiveTools([...f.pi.getActiveTools(), 'inspect_agent']);
   await f.command('');
   const prompt = await f.event('before_agent_start', { systemPrompt: 'Original' });
   assert.match(prompt.systemPrompt, /use Paj inspect_agent/);
   assert.equal(await f.event('tool_call', { toolName: 'inspect_agent', input: { recipient: worker.id } }), undefined);
-  assert.equal((await f.event('tool_call', { toolName: 'inspect_agent', input: { recipient: 'child' } })).block, true);
+  assert.equal(await f.event('tool_call', { toolName: 'inspect_agent', input: { recipient: 'child' } }), undefined);
+  assert.match(prompt.systemPrompt, /direct all instructions through the owning main/);
+  assert.equal((await f.event('tool_call', { toolName: 'send_agent_message',
+    input: { recipient: 'child', kind: 'update' } })).block, true);
   await f.command('off');
   assert.equal(await f.event('tool_call', { toolName: 'inspect_agent', input: { recipient: 'child' } }), undefined);
 });

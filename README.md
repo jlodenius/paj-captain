@@ -72,11 +72,20 @@ Run `/reload`, then `/captain`. Restart Pi instead if you upgraded Pi itself.
 
 ## Usage
 
-Ask Captain to find or launch agents, delegate work, inspect progress, and report results.
-Workers run independently in normal tmux sessions and keep running when Captain exits.
+Captain coordinates rather than doing project work: it delegates to the relevant existing MAIN,
+including busy agents, and launches a new main only when none exists. Each responsible main arranges
+its own regular subagent reviews, resolves findings, and reports results and checks. Ordinary mains
+continue to use regular subagents. Workers run independently in normal tmux sessions and keep running
+when Captain exits.
+
+With compatible Paj, Captain can observe mains and their children; it directs children through their
+owning main. Observation permission is published through Pi's `paj:captain-inspection` event with
+`{ enabled: boolean }`; Paj authenticates the live main and enforces inspection access.
 
 Use `/captain status`, `/captain settings`, and `/captain tasks` to inspect state.
-`/captain off` restores ordinary mode without stopping workers.
+`/captain off` restores ordinary mode without stopping workers. Captain always starts OFF after
+startup, resume, fork, switch, reload, or history navigation; historic mode entries never reactivate
+it. Explicit `/captain` activation is required. There is no model-callable mode tool.
 
 Workspace rules restrict launches, not communication. These are tool-level checks, not an OS
 sandbox. Queued work is not proof of execution; uncertain actions are not automatically repeated.
