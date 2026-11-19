@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -85,7 +85,9 @@ function rpc(t, root, withPaj) {
     assert.equal(response.disposition, 'handled');
     return events.slice(start).filter(event => event.method === 'notify');
   }
-  return { request, command, events };
+  const sessions = () => JSON.parse(execFileSync(process.env.PAJ_CAPTAIN_PAJ_BIN || 'paj',
+    ['--json', 'session', 'list'], { cwd: root, env, encoding: 'utf8' }));
+  return { request, command, events, sessions };
 }
 
 test('real Pi discovers the whole-package link and /captain fails closed without Paj',
@@ -103,7 +105,7 @@ test('real Pi discovers the whole-package link and /captain fails closed without
   assert.ok(!after.active.includes('captain_delegate'));
 });
 
-test('real Pi and Paj support /captain activation, hidden/direct tools, OFF after reload and disabling',
+test('real Pi and Paj preserve Captain ON and OFF across same-session reload, and reauthorizes a new session',
   { skip: !process.env.PAJ_CAPTAIN_PI_BIN || !pajExtension, timeout: 30000 }, async t => {
   const root = mkdtempSync(join(tmpdir(), 'cpt-'));
   const connection = rpc(t, root, true);
@@ -117,17 +119,31 @@ test('real Pi and Paj support /captain activation, hidden/direct tools, OFF afte
   assert.ok(!active.active.includes('spawn_sub_agent'));
   assert.equal(active.all.find(tool => tool.name === 'captain_delegate').exposure, 'direct');
   assert.ok(active.branch.some(entry => entry.customType === 'paj-captain-mode' && entry.data.enabled));
+  const before = connection.sessions()[0];
+  assert.ok(before.captainInspection);
   await connection.command('/captain-test-reload');
+  const after = connection.sessions()[0];
+  assert.equal(after.id, before.id);
+  assert.equal(after.piSessionId, before.piSessionId);
+  assert.ok(after.captainInspection);
+  assert.notEqual(after.captainInspection, before.captainInspection);
   const reloaded = JSON.parse((await connection.command('/captain-inspect')).at(-1).message);
-  assert.ok(!reloaded.active.includes('captain_delegate'));
-  await connection.command('/captain');
+  assert.ok(reloaded.active.includes('captain_delegate'));
+  assert.ok(!reloaded.active.includes('spawn_sub_agent'));
+  assert.equal(reloaded.all.find(tool => tool.name === 'captain_delegate').exposure, 'direct');
   await connection.command('/captain off');
+  await connection.command('/captain-test-reload');
   const inactive = JSON.parse((await connection.command('/captain-inspect')).at(-1).message);
   assert.ok(!inactive.active.includes('captain_delegate'));
   assert.ok(inactive.active.includes('spawn_sub_agent'));
   assert.equal(inactive.all.find(tool => tool.name === 'captain_delegate').exposure, 'hidden');
+  assert.ok(!connection.sessions()[0].captainInspection);
   await connection.command('/captain');
   assert.equal((await connection.request('new_session')).cancelled, false);
   const fresh = JSON.parse((await connection.command('/captain-inspect')).at(-1).message);
-  assert.ok(!fresh.active.includes('captain_delegate'));
+  assert.ok(fresh.active.includes('captain_delegate'));
+  const newSession = connection.sessions()[0];
+  assert.notEqual(newSession.piSessionId, before.piSessionId);
+  assert.ok(newSession.captainInspection);
+  assert.notEqual(newSession.captainInspection, after.captainInspection);
 });

@@ -131,8 +131,8 @@ test('Captain toggling, reload and shutdown leave Voice narration ownership unch
       await f.captainEvent('session_shutdown', { reason: 'reload' });
       f.load();
       await f.captainEvent('session_start', { reason: 'reload' });
-    }, false],
-    [() => f.captain('on'), true],
+      await f.captainEvent('resources_discover', { reason: 'reload' });
+    }, true],
     [() => f.captainEvent('session_shutdown', { reason: 'quit' }), false],
   ];
   for (const [change, enabled] of expectations) {

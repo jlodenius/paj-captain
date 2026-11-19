@@ -71,6 +71,10 @@ async function fixture(t, { split = false, automatic = false } = {}) {
     });
     pi.registerCommand('compaction-test-reload', {description:'Reload fixture',
       handler:async (_args,ctx) => { await ctx.reload(); }});
+    pi.registerCommand('captain-test-tree', {description:'Navigate fixture history',
+      handler:async (id,ctx) => { await ctx.navigateTree(id, {summarize:false}); }});
+    pi.registerCommand('captain-test-tools', {description:'Read fixture tools',
+      handler:async (_args,ctx) => { ctx.ui.notify(JSON.stringify(pi.getActiveTools()), 'info'); }});
   }`);
   writeFileSync(join(agent, 'settings.json'), JSON.stringify({ defaultProjectTrust: 'always',
     cacheWarming: 'off', enableInstallTelemetry: false, retry: { enabled: false },
@@ -204,16 +208,19 @@ async function fixture(t, { split = false, automatic = false } = {}) {
     const notices = await command('/captain');
     assert.ok(notices.some(event => event.message.startsWith('Captain enabled')), JSON.stringify({ notices, errors, events }));
   }
-  async function seedUncertainTask() {
+  async function registrySession() {
     const state = await request('get_state');
     const sessions = JSON.parse((await execute(process.env.PAJ_CAPTAIN_PAJ_BIN,
       ['--json', 'session', 'list', '--all'], { cwd: root, env })).stdout);
-    const owner = sessions.find(value => value.piSessionId === state.sessionId);
+    return sessions.find(value => value.piSessionId === state.sessionId);
+  }
+  async function seedUncertainTask() {
+    const owner = await registrySession();
     assert.ok(owner);
-    const store = createTaskStore(join(agent, 'captain', 'sessions', `${state.sessionId}.json`));
+    const store = createTaskStore(join(agent, 'captain', 'sessions', `${owner.piSessionId}.json`));
     const worker = randomUUID();
     const task = store.begin({ requestId: 'historical-uncertain-send',
-      ownerPiSessionId: state.sessionId, ownerPajSessionId: owner.id,
+      ownerPiSessionId: owner.piSessionId, ownerPajSessionId: owner.id,
       target: { id: worker, name: 'historical-worker', piSessionId: randomUUID(), role: 'primary',
         parentPiSessionId: null, projectId: 'historical-project', projectRoot: root, status: 'idle' },
       assignment: 'Historical request with an uncertain outcome. Never resend automatically.' });
@@ -228,7 +235,7 @@ async function fixture(t, { split = false, automatic = false } = {}) {
     return snapshot;
   }
   return { request, command, prompt, requests, entries, preparations, enable, ledgerFiles, ledgerTasks, events,
-    seedUncertainTask, fail: value => { failure = value; }, root, agent,
+    seedUncertainTask, registrySession, fail: value => { failure = value; }, root, agent,
     holdSummary: () => new Promise(resolve => { heldSummary = resolve; }) };
 }
 
@@ -287,7 +294,7 @@ test('real Pi ordinary sessions keep stock compaction without Captain activation
     assert.deepEqual(f.ledgerFiles(), []);
   });
 
-test('real Pi persists guided manual and repeated compactions, requires activation after reload, and leaves off stock',
+test('real Pi preserves guided compaction across reload and leaves off stock',
   realPi, async t => {
     const f = await fixture(t);
     await f.enable();
@@ -299,7 +306,6 @@ test('real Pi persists guided manual and repeated compactions, requires activati
     assert.equal(f.requests.length, 1, 'No post-summary rewrite call');
     assertGuided(f.requests, focus);
     await f.command('/compaction-test-reload');
-    await f.enable();
     await f.prompt('Continue the discussion only. '.repeat(160));
     const resumedSystem = JSON.stringify(f.requests.at(-1).payload.messages
       .filter(message => ['system', 'developer'].includes(message.role)));
@@ -331,6 +337,62 @@ test('real Pi persists guided manual and repeated compactions, requires activati
     assert.ok(f.requests.slice(offStart).every(value => !userText(value).includes(guidance)));
     assert.ok(JSON.stringify(f.requests.slice(offStart)).includes('OFF-MANUAL-FOCUS'));
   });
+
+test('real Pi carries mode across fork and resume without copying old ledger contents', realPi, async t => {
+  const f = await fixture(t);
+  const original = await f.request('get_state');
+  await f.enable();
+  const ledger = await f.seedUncertainTask();
+  const entryId = f.entries().find(value => value.type === 'message' && value.message.role === 'user').id;
+  assert.equal((await f.request('fork', { entryId })).cancelled, false);
+  assert.notEqual((await f.request('get_state')).sessionId, original.sessionId);
+  const enabled = async () => JSON.parse((await f.command('/captain status')).at(-1).message).enabled;
+  assert.equal(await enabled(), true);
+  assert.deepEqual(JSON.parse((await f.command('/captain tasks')).at(-1).message), []);
+  assert.equal((await f.request('switch_session', { sessionPath: original.sessionFile })).cancelled, false);
+  assert.equal((await f.request('get_state')).sessionId, original.sessionId);
+  assert.equal(await enabled(), true);
+  const previous = JSON.parse((await f.command('/captain tasks')).at(-1).message);
+  assert.equal(previous.length, 1);
+  assert.equal(previous[0].id, ledger[0][1][0].id);
+  assert.equal((await f.request('clone')).cancelled, false);
+  assert.notEqual((await f.request('get_state')).sessionId, original.sessionId);
+  assert.equal(await enabled(), true);
+  await f.command('/captain off');
+  assert.equal((await f.request('switch_session', { sessionPath: original.sessionFile })).cancelled, false);
+  assert.equal(await enabled(), false);
+  await f.command('/compaction-test-reload');
+  assert.equal(await enabled(), false);
+  assert.equal(f.requests.length, 0);
+});
+
+test('real Pi preserves ON and OFF while navigating historical entries with /tree', realPi, async t => {
+  const f = await fixture(t);
+  const targets = f.entries().filter(value => value.type === 'message' && value.message.role === 'assistant');
+  const tools = async () => JSON.parse((await f.command('/captain-test-tools')).at(-1).message);
+  assert.ok((await tools()).includes('spawn_sub_agent'));
+  await f.enable();
+  const grant = await f.registrySession();
+  assert.ok(grant.captainInspection);
+  await f.prompt('Respond briefly without using tools.');
+  const captainTurn = f.entries().findLast(value => value.type === 'message' && value.message.role === 'assistant');
+  await f.command(`/captain-test-tree ${targets[1].id}`);
+  const lastStatus = () => f.events.filter(event => event.method === 'setStatus' && event.statusKey === 'paj-captain').at(-1);
+  assert.equal(lastStatus().statusText, 'Captain');
+  assert.ok((await tools()).includes('captain_delegate'));
+  assert.ok(!(await tools()).includes('spawn_sub_agent'));
+  const same = await f.registrySession();
+  assert.equal(same.id, grant.id);
+  assert.equal(same.piSessionId, grant.piSessionId);
+  assert.equal(same.captainInspection, grant.captainInspection);
+  await f.command('/captain off');
+  await f.command(`/captain-test-tree ${captainTurn.id}`);
+  assert.equal(lastStatus().statusText, undefined);
+  assert.ok(!(await tools()).includes('captain_delegate'));
+  assert.ok((await tools()).includes('spawn_sub_agent'));
+  assert.ok(!(await f.registrySession()).captainInspection);
+  assert.equal(f.requests.length, 1);
+});
 
 test('real Pi split-span compaction guides both stock summary calls and combines persisted usage',
   realPi, async t => {

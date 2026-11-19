@@ -98,9 +98,11 @@ registrations and their messages are not migrated or deleted; check them separat
 existing history tools. A new registration is not a continuation of the old inbox, and old
 assignments are not resent.
 
-`/captain off` restores ordinary mode without stopping workers. Captain always starts OFF after
-startup, resume, fork, switch, reload, or history navigation; historic mode entries never reactivate
-it. Explicit `/captain` activation is required. There is no model-callable mode tool.
+`/captain off` restores ordinary mode without stopping workers. Captain starts OFF in a fresh Pi
+process. Within that process, ON/OFF carries across reload, tree
+navigation, new sessions, resume, and fork/clone. When Pi replaces the runtime, continuing ON
+requires a fresh Paj inspection handshake. Tasks stay with their original Pi session, and historic
+mode entries never reactivate Captain. There is no model-callable mode tool.
 
 Workspace rules restrict launches, not communication. These are tool-level checks, not an OS
 sandbox. Queued work is not proof of execution; uncertain actions are not automatically repeated.

@@ -56,13 +56,16 @@ function fixture(t, overrides = {}) {
     getActiveTools: () => active,
     setActiveTools: names => { active = names; },
     registerCommand: (name, command) => commands.set(name, command),
-    appendEntry: (customType, data) => entries.push({ type: 'custom', customType, data }),
+    appendEntry: (customType, data) => entries.push({ id: String(entries.length + 1),
+      parentId: entries.at(-1)?.id ?? null, type: 'custom', customType, data }),
     on: (event, handler) => { handlers.set(event, handler); },
   };
-  const ctx = { cwd: root, sessionManager: { getSessionId: () => ownPiId, getBranch: () => entries },
+  const ctx = { cwd: root, sessionManager: { getSessionId: () => ownPiId, getBranch: () => entries,
+    getSessionFile: () => undefined },
     ui: { setStatus() {}, notify: (...args) => notices.push(args) }, waitForIdle: async () => {} };
-  registerCaptain(pi, Type, { piVersion: '1.5.2', ...overrides, paths, client });
-  return { root, paths, client, calls, entries, notices, inspection, busActivity, handlers, tools, pi, ctx,
+  const rebind = () => registerCaptain(pi, Type, { piVersion: '1.5.2', ...overrides, paths, client });
+  rebind();
+  return { root, paths, client, calls, entries, notices, inspection, busActivity, handlers, tools, pi, ctx, rebind,
     command: args => commands.get('captain').handler(args, ctx),
     tool: (name, params = {}, id = 'tool-call') => tools.get(name).execute(id, params, undefined, undefined, ctx),
     event: (name, event = {}) => handlers.get(name)(event, ctx) };
@@ -132,8 +135,9 @@ test('Captain lifecycle does not discover or subscribe to Voice', async t => {
   await f.command('off');
   await f.command('on');
   await f.event('session_shutdown', { reason: 'reload' });
+  f.rebind();
   await f.event('session_start', { reason: 'reload' });
-  await f.command('on');
+  await f.event('resources_discover', { reason: 'reload' });
   await f.event('session_shutdown', { reason: 'quit' });
   assert.ok(f.busActivity.includes('paj:captain-inspection:v1'));
   assert.deepEqual(f.busActivity.filter(name => name.startsWith('paj-voice:')), []);
@@ -325,7 +329,7 @@ test('missing Paj receiver cannot enable Captain', async t => {
 });
 
 test('late activation acknowledgement cannot enable after lifecycle revocation', async t => {
-  for (const boundary of ['session_shutdown', 'session_tree', 'off']) {
+  for (const boundary of ['session_shutdown', 'off']) {
     const f = fixture(t);
     let acknowledge;
     let requested;
@@ -394,28 +398,95 @@ test('off waits for registry revocation while immediately disabling Captain tool
   assert.equal(settled, true);
 });
 
-test('all lifecycle boundaries revoke Captain inspection and never restore historical mode', async t => {
+test('cold startup never restores historical mode', async t => {
   const f = fixture(t);
-  for (const reason of ['startup', 'reload', 'new', 'resume', 'fork']) {
+  for (const reason of ['startup']) {
     await f.command('on');
     assert.deepEqual(f.inspection.at(-1), { enabled: true });
     await f.event('session_shutdown', { reason });
     assert.deepEqual(f.inspection.at(-1), { enabled: false });
+    f.rebind();
     await f.event('session_start', { reason });
+    await f.event('resources_discover', { reason });
     assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
     assert.deepEqual(f.inspection.at(-1), { enabled: false });
     assert.equal(await f.event('before_agent_start', { systemPrompt: 'Original' }), undefined);
   }
   await f.command('on');
+  f.pi.setActiveTools(['read', 'spawn_sub_agent']);
+  await f.event('session_tree');
+  assert.ok(f.pi.getActiveTools().includes('captain_agents'));
+  assert.ok(!f.pi.getActiveTools().includes('spawn_sub_agent'));
+  assert.deepEqual(f.inspection.at(-1), { enabled: true });
+  await f.command('off');
+  f.pi.setActiveTools(['read', 'captain_agents']);
   await f.event('session_tree');
   assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
-  assert.deepEqual(f.inspection.at(-1), { enabled: false });
   assert.ok(f.entries.some(entry => entry.data.enabled));
   assert.ok(!f.tools.has('captain_mode'));
 });
 
-test('pending activation cannot outlive off, shutdown, navigation or a changed session', async t => {
-  for (const boundary of ['off', 'session_shutdown', 'session_tree', 'identity']) {
+test('reload waits for fresh inspection and keeps task identity and request dedup without sending', async t => {
+  const f = fixture(t);
+  const params = { recipient: worker.id, assignment: 'Review and report.' };
+  await f.command('on');
+  const task = (await f.tool('captain_delegate', params, 'stable-request')).details;
+  await f.event('session_shutdown', { reason: 'reload' });
+  assert.deepEqual(f.inspection.at(-1), { enabled: false });
+  f.rebind();
+  await f.event('session_start', { reason: 'reload' });
+  f.pi.appendEntry('paj-registration', { id: self.id });
+  f.pi.appendEntry('unrelated-startup-metadata', {});
+  assert.ok(!f.pi.getActiveTools().includes('captain_delegate'));
+  await f.event('resources_discover', { reason: 'reload' });
+  assert.deepEqual(f.inspection.at(-1), { enabled: true });
+  assert.ok(f.pi.getActiveTools().includes('captain_delegate'));
+  assert.equal(f.calls.filter(call => call[0] === 'send').length, 1);
+  assert.equal((await f.tool('captain_tasks', { taskId: task.id })).details.id, task.id);
+  assert.equal((await f.tool('captain_delegate', params, 'stable-request')).details.id, task.id);
+  assert.equal(f.calls.filter(call => call[0] === 'send').length, 1);
+  assert.equal(f.entries.filter(entry => entry.customType === 'paj-captain-mode').length, 1);
+});
+
+test('reload handoff is scoped to the open manager and identity and fails closed on a rejected regrant', async t => {
+  for (const boundary of ['different-manager', 'different-identity', 'off', 'rejected']) {
+    const f = fixture(t);
+    await f.command('on');
+    if (boundary === 'off') await f.command('off');
+    await f.event('session_shutdown', { reason: 'reload' });
+    f.rebind();
+    if (boundary === 'different-manager') f.ctx.sessionManager = { ...f.ctx.sessionManager };
+    if (boundary === 'different-identity') f.ctx.sessionManager.getSessionId = () => 'another-session';
+    await f.event('session_start', { reason: 'reload' });
+    if (boundary === 'rejected') f.pi.events.emit = (_name, data) => {
+      data.reply(data.enabled ? Promise.reject(new Error('Inspection rejected')) : Promise.resolve());
+    };
+    const before = f.inspection.length;
+    await f.event('resources_discover', { reason: 'reload' });
+    assert.ok(!f.pi.getActiveTools().includes('captain_delegate'), boundary);
+    assert.ok(!f.inspection.slice(before).some(data => data.enabled), boundary);
+    if (boundary === 'rejected') assert.match(f.notices.at(-1)[0], /Captain stayed off/);
+  }
+});
+
+test('off racing teardown wins over an ON handoff', async t => {
+  const f = fixture(t);
+  await f.command('on');
+  let release;
+  const revoked = new Promise(resolve => { release = resolve; });
+  f.pi.events.emit = (_name, data) => data.reply(revoked);
+  const shutdown = f.event('session_shutdown', { reason: 'reload' });
+  const off = f.command('off');
+  release();
+  await Promise.all([shutdown, off]);
+  f.rebind();
+  await f.event('session_start', { reason: 'reload' });
+  await f.event('resources_discover', { reason: 'reload' });
+  assert.ok(!f.pi.getActiveTools().includes('captain_agents'));
+});
+
+test('pending activation cannot outlive off, shutdown or a changed session', async t => {
+  for (const boundary of ['off', 'session_shutdown', 'identity']) {
     let resolve;
     let checking;
     const checked = new Promise(done => { checking = done; });

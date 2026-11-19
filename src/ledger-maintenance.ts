@@ -132,7 +132,8 @@ export function createLedgerMaintenance(dir: string) {
           throw new Error('Ledger changed while reading; quit any older runtimes and retry');
         }
         const state = validate(JSON.parse(bytes.toString('utf8', 0, offset)));
-        if (Object.keys(state).length !== 2 || state.tasks.some(task => `${task.ownerPiSessionId}.json` !== name)
+        if (Object.keys(state).some(key => !['version', 'tasks', 'pajCheckpoints'].includes(key))
+            || state.tasks.some(task => `${task.ownerPiSessionId}.json` !== name)
             || (!state.tasks.length && !legacyLocks.has(`${name}.lock`))) {
           throw new Error('Cannot verify this file is a Captain ledger for the named session');
         }

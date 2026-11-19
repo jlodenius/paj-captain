@@ -47,8 +47,8 @@ verbosity. Results need no acknowledgement; routine progress stays quiet unless 
 ## Session and preferences
 
 Use `captain_settings` to save only user-requested preference changes, including launch policy.
-Captain starts OFF on startup, resume, fork, switch, reload, and history navigation, regardless of
-historic mode entries. Only explicit `/captain` activation enables it and its observation permission;
-there is no mode tool. `/captain off` leaves workers running. History navigation does not undo
+Captain starts OFF in a fresh Pi process. Within the process, mode carries across reload and
+conversation navigation. A replacement runtime needs fresh Paj inspection permission; tasks do not
+transfer between Pi sessions. Historic mode entries do not enable Captain. `/captain off` leaves workers running. History navigation does not undo
 external actions, and forks have separate assignment ledgers. Consult recorded state before
 repeating actions.

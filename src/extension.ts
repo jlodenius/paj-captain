@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import process from 'node:process';
 import { captainPaths, loadConfig, saveConfig } from './config.ts';
 import { createPajClient } from './paj.ts';
 import { createTaskStore } from './tasks.ts';
@@ -17,6 +18,14 @@ import { cancelCaptainCompaction, carryCaptainFiles, compactCaptain, supportsCap
 
 const MODE_ENTRY = 'paj-captain-mode';
 const MAX_REFRESH_PAGES = 4;
+const CONTINUITY = Symbol.for('paj-captain.continuity.v1');
+type SessionManager = ExtensionContext['sessionManager'];
+type ModeSnapshot = { revision: number; enabled: boolean; childTools: string[] };
+type Handoff = ModeSnapshot & ({ reason: 'reload'; manager: WeakRef<SessionManager>; id: string }
+  | { reason: 'new' | 'resume' | 'fork'; sourceFile?: string; targetFile?: string });
+const processState: typeof process & { [CONTINUITY]?: { revision: number; handoff?: Handoff } } = process;
+// Pi reloads the module; keep only a one-shot, process-local activation handoff.
+const continuity = processState[CONTINUITY] ??= { revision: 0 };
 const CHILD_TOOLS = ['spawn_sub_agent', 'list_sub_agents', 'assign_subagent_task', 'complete_subagent_task'];
 const SKILL = fileURLToPath(new URL(import.meta.url.endsWith('.ts')
   ? '../skills/paj-captain/SKILL.md' : '../../skills/paj-captain/SKILL.md', import.meta.url));
@@ -60,6 +69,9 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
   let store: ReturnType<typeof createTaskStore> | undefined;
   let sessionId: string | undefined;
   let restoredTools: string[] = [];
+  let pendingMode: ModeSnapshot | undefined;
+  let treeChildTools: string[] | undefined;
+  let closing = false;
   const definitions: { name: string; expose: (enabled: boolean) => void }[] = [];
   const names = () => definitions.map(tool => tool.name);
   const identity = (ctx: ExtensionContext) => {
@@ -145,17 +157,21 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
     };
     return renderTaskView(header, task ? [task] : tasks, refreshedRegistration, task);
   };
+  const activeChildTools = () => pi.getActiveTools().filter(name => CHILD_TOOLS.includes(name));
+  const syncTools = (childTools?: readonly string[]) => {
+    const current = pi.getActiveTools().filter(name => !names().includes(name));
+    const withoutChildren = current.filter(name => !CHILD_TOOLS.includes(name));
+    pi.setActiveTools(enabled ? [...withoutChildren, ...names()]
+      : childTools === undefined ? current : [...withoutChildren, ...childTools]);
+  };
   const expose = (next: boolean) => {
     if (!next) generation++;
-    if (enabled !== next) {
-      if (next) restoredTools = pi.getActiveTools().filter(name => CHILD_TOOLS.includes(name));
-      enabled = next;
-      for (const definition of definitions) definition.expose(next);
-      const current = pi.getActiveTools().filter(name => !names().includes(name));
-      pi.setActiveTools(next ? [...current.filter(name => !CHILD_TOOLS.includes(name)), ...names()]
-        : [...new Set([...current, ...restoredTools])]);
-      if (!next) restoredTools = [];
-    }
+    if (enabled === next) return;
+    if (next) restoredTools = activeChildTools();
+    enabled = next;
+    for (const definition of definitions) definition.expose(next);
+    syncTools(restoredTools);
+    if (!next) restoredTools = [];
   };
   const status = (ctx: ExtensionContext) => ctx.ui.setStatus('paj-captain', enabled ? 'Captain' : undefined);
   const add = <P extends TSchema, R>(name: string, description: string, parameters: P,
@@ -260,27 +276,121 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
       return { path: paths.configFile, ...config };
     });
 
+  const activate = async (ctx: ExtensionContext, revision: number, waitForIdle?: () => Promise<void>) => {
+    if (closing || revision !== continuity.revision) return false;
+    expose(false);
+    const activation = generation;
+    const id = identity(ctx);
+    const isCurrent = () => !closing && activation === generation && revision === continuity.revision
+      && identity(ctx) === id;
+    await setCaptainInspection(pi.events, id, false);
+    if (!isCurrent()) return false;
+    if (waitForIdle) await waitForIdle();
+    if (!isCurrent()) return false;
+    loadConfig(paths.configFile);
+    await client.self(id);
+    if (!isCurrent()) return false;
+    const pendingLease = lease();
+    try {
+      store = undefined;
+      sessionId = undefined;
+      ledger(ctx);
+      await setCaptainInspection(pi.events, id, true);
+      if (!isCurrent()) return false;
+      expose(true);
+      activationLease = pendingLease;
+    } catch (error) {
+      if (isCurrent()) {
+        expose(false);
+        try { await setCaptainInspection(pi.events, id, false); } catch {}
+      }
+      throw error;
+    } finally { if (activationLease !== pendingLease) pendingLease.drop(); }
+    status(ctx);
+    void maintenance.large().then(large => {
+      if (large && enabled && generation === activation) ctx.ui.notify(
+        'Captain ledgers are large (over 3 GiB). To erase all saved task history, turn Captain off in all local Pi sessions, then run /captain erase-ledgers.', 'warning');
+    }).catch(() => undefined);
+    return true;
+  };
+
+  const clearMode = (ctx: ExtensionContext) => {
+    pendingMode = undefined;
+    expose(false);
+    status(ctx);
+  };
   const disable = async (ctx: ExtensionContext) => {
     const previous = activationLease;
     activationLease = undefined;
-    expose(false);
     store = undefined;
     sessionId = undefined;
     try {
-      status(ctx);
+      clearMode(ctx);
       await setCaptainInspection(pi.events, identity(ctx), false);
     } finally { previous?.drop(); }
   };
-  const reset = async (_event: unknown, ctx: ExtensionContext) => {
-    const wasEnabled = enabled;
-    try { await disable(ctx); }
-    catch (error) {
-      if (wasEnabled) ctx.ui.notify(`Captain revocation failed: ${errorMessage(error)}`, 'error');
-    }
+  const cancelContinuity = () => {
+    continuity.revision++;
+    delete continuity.handoff;
   };
-  pi.on('session_start', reset);
-  pi.on('session_tree', reset);
-  pi.on('session_shutdown', reset);
+  pi.on('session_shutdown', async (event, ctx) => {
+    if (closing) return;
+    closing = true;
+    delete continuity.handoff;
+    const state = { revision: continuity.revision, enabled,
+      childTools: enabled ? restoredTools : activeChildTools() };
+    const reason = event.reason;
+    if (reason === 'reload') {
+      continuity.handoff = { ...state, reason, manager: new WeakRef(ctx.sessionManager), id: identity(ctx) };
+    } else if (reason === 'new' || reason === 'resume' || reason === 'fork') {
+      continuity.handoff = { ...state, reason, sourceFile: ctx.sessionManager.getSessionFile(),
+        targetFile: event.targetSessionFile };
+    }
+    // Paj also revokes in teardown and may already have closed the old receiver.
+    try { await disable(ctx); } catch {}
+  });
+  pi.on('session_start', async (event, ctx) => {
+    // Pi 1.5.2 RPC can bind a replacement runtime twice; Paj registers on each bind.
+    const rebinding = !closing && enabled && sessionId === identity(ctx);
+    closing = false;
+    if (rebinding) {
+      const state = { revision: continuity.revision, enabled: true, childTools: restoredTools };
+      const disabling = disable(ctx);
+      pendingMode = state;
+      try { await disabling; } catch {}
+      return;
+    }
+    const handoff = continuity.handoff;
+    delete continuity.handoff;
+    clearMode(ctx);
+    if (!handoff || handoff.reason !== event.reason) return;
+    if (handoff.reason === 'reload') {
+      if (handoff.manager.deref() !== ctx.sessionManager || handoff.id !== identity(ctx)) return;
+    } else if (handoff.sourceFile !== event.previousSessionFile
+        || (handoff.targetFile !== undefined && handoff.targetFile !== ctx.sessionManager.getSessionFile())) return;
+    pendingMode = handoff;
+  });
+  pi.on('session_before_tree', () => {
+    treeChildTools = enabled ? restoredTools : activeChildTools();
+  });
+  pi.on('session_tree', () => {
+    // Pi replays the transcript loadout, which may contain a historical Captain mask.
+    syncTools(treeChildTools);
+    treeChildTools = undefined;
+  });
+  // All session_start handlers, including Paj registration, have finished at this point.
+  pi.on('resources_discover', async (_event, ctx) => {
+    const mode = pendingMode;
+    pendingMode = undefined;
+    const continuing = mode && !closing && mode.revision === continuity.revision;
+    if (continuing) syncTools(mode.childTools);
+    try {
+      if (continuing && mode.enabled) await activate(ctx, mode.revision);
+      else if (!enabled && !closing) await setCaptainInspection(pi.events, identity(ctx), false);
+    } catch (error) {
+      if (continuing && mode.enabled) ctx.ui.notify(`Captain stayed off: ${errorMessage(error)}`, 'error');
+    }
+  });
 
   pi.on('tool_call', async (event, ctx) => {
     if (names().includes(event.toolName) && !enabled) return { block: true, reason: 'Captain is disabled' };
@@ -362,44 +472,14 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
       try {
         const action = args.trim() || 'on';
         if (action === 'off') {
+          cancelContinuity();
           await disable(ctx);
           pi.appendEntry(MODE_ENTRY, { version: 1, enabled: false });
           ctx.ui.notify('Captain disabled. Launched main agents keep running.', 'info');
         } else if (action === 'on') {
-          if (enabled) return;
-          expose(false);
-          const activation = generation;
-          const id = identity(ctx);
-          await setCaptainInspection(pi.events, id, false);
-          if (activation !== generation || identity(ctx) !== id) return;
-          await ctx.waitForIdle();
-          if (activation !== generation || identity(ctx) !== id) return;
-          loadConfig(paths.configFile);
-          await client.self(id);
-          if (activation !== generation || identity(ctx) !== id) return;
-          const pendingLease = lease();
-          try {
-            store = undefined;
-            sessionId = undefined;
-            ledger(ctx);
-            await setCaptainInspection(pi.events, id, true);
-            if (activation !== generation || identity(ctx) !== id) return;
-            expose(true);
-            activationLease = pendingLease;
-          } catch (error) {
-            if (activation === generation && identity(ctx) === id) {
-              expose(false);
-              try { await setCaptainInspection(pi.events, id, false); } catch {}
-            }
-            throw error;
-          } finally { if (activationLease !== pendingLease) pendingLease.drop(); }
+          if (enabled || !await activate(ctx, continuity.revision, () => ctx.waitForIdle())) return;
           pi.appendEntry(MODE_ENTRY, { version: 1, enabled: true });
-          status(ctx);
           ctx.ui.notify('Captain enabled in this session. Use /captain settings to inspect launch permissions.', 'info');
-          void maintenance.large().then(large => {
-            if (large && enabled && generation === activation) ctx.ui.notify(
-              'Captain ledgers are large (over 3 GiB). To erase all saved task history, turn Captain off in all local Pi sessions, then run /captain erase-ledgers.', 'warning');
-          }).catch(() => undefined);
         } else if (action === 'status' || action === 'settings') {
           ctx.ui.notify(JSON.stringify({ enabled, path: paths.configFile, ...loadConfig(paths.configFile) }, null, 2), 'info');
         } else if (action === 'tasks') {
