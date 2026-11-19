@@ -24,6 +24,7 @@ function fixture(t, overrides = {}) {
   const entries = [];
   const notices = [];
   const inspection = [];
+  const busActivity = [];
   const handlers = new Map();
   const tools = new Map();
   const commands = new Map();
@@ -39,12 +40,16 @@ function fixture(t, overrides = {}) {
     ...overrides.client,
   };
   const pi = {
-    events: { emit: (name, data) => {
-      if (name !== 'paj:captain-inspection:v1') return;
-      inspection.push({ enabled: data.enabled });
-      assert.equal(data.piSessionId, ctx.sessionManager.getSessionId());
-      data.reply(Promise.resolve());
-    } },
+    events: {
+      on(name) { busActivity.push(name); return () => {}; },
+      emit(name, data) {
+        busActivity.push(name);
+        if (name !== 'paj:captain-inspection:v1') return;
+        inspection.push({ enabled: data.enabled });
+        assert.equal(data.piSessionId, ctx.sessionManager.getSessionId());
+        data.reply(Promise.resolve());
+      },
+    },
     registerTool: tool => { tools.set(tool.name, tool); if (tool.exposure === 'direct') active = [...new Set([...active, tool.name])]; },
     getActiveTools: () => active,
     setActiveTools: names => { active = names; },
@@ -55,11 +60,26 @@ function fixture(t, overrides = {}) {
   const ctx = { cwd: root, sessionManager: { getSessionId: () => ownPiId, getBranch: () => entries },
     ui: { setStatus() {}, notify: (...args) => notices.push(args) }, waitForIdle: async () => {} };
   registerCaptain(pi, Type, { piVersion: '1.5.2', ...overrides, paths, client });
-  return { root, paths, client, calls, entries, notices, inspection, handlers, tools, pi, ctx,
+  return { root, paths, client, calls, entries, notices, inspection, busActivity, handlers, tools, pi, ctx,
     command: args => commands.get('captain').handler(args, ctx),
     tool: (name, params = {}, id = 'tool-call') => tools.get(name).execute(id, params, undefined, undefined, ctx),
     event: (name, event = {}) => handlers.get(name)(event, ctx) };
 }
+
+test('Captain lifecycle does not discover or subscribe to Voice', async t => {
+  const f = fixture(t);
+  await f.event('session_start');
+  await f.command('on');
+  await f.event('before_agent_start', { systemPrompt: 'Original' });
+  await f.command('off');
+  await f.command('on');
+  await f.event('session_shutdown', { reason: 'reload' });
+  await f.event('session_start', { reason: 'reload' });
+  await f.command('on');
+  await f.event('session_shutdown', { reason: 'quit' });
+  assert.ok(f.busActivity.includes('paj:captain-inspection:v1'));
+  assert.deepEqual(f.busActivity.filter(name => name.startsWith('paj-voice:')), []);
+});
 
 function compactionEvent(entries = []) {
   return { branchEntries: entries, signal: new AbortController().signal, preparation: {

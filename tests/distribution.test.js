@@ -8,6 +8,28 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
+test('rebuilding drops generated modules removed from source', t => {
+  const temporary = mkdtempSync(join(tmpdir(), 'captain-rebuild-'));
+  t.after(() => rmSync(temporary, { recursive: true, force: true }));
+  for (const name of ['src', 'extensions', 'scripts', 'package.json']) {
+    cpSync(join(root, name), join(temporary, name), { recursive: true });
+  }
+  const build = () => {
+    const result = spawnSync(process.execPath, ['scripts/build.ts'], {
+      cwd: temporary, encoding: 'utf8', timeout: 10000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  const source = join(temporary, 'src/inspection.ts');
+  const generated = join(temporary, 'dist/src/inspection.js');
+  build();
+  assert.ok(existsSync(generated));
+  rmSync(source);
+  build();
+  assert.ok(!existsSync(generated));
+  assert.ok(existsSync(join(temporary, 'dist/src/extension.js')));
+});
+
 test('built distribution executes below node_modules with a JavaScript launch helper', {
   skip: !existsSync(join(root, 'dist/src/launch.js')) && 'Run npm run build first',
 }, t => {

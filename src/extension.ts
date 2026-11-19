@@ -10,7 +10,6 @@ import { createPajClient } from './paj.ts';
 import { createTaskStore } from './tasks.ts';
 import { listWorkspaces } from './workspaces.ts';
 import { launchMain } from './launch.ts';
-import { createCaptainVoice } from './voice.ts';
 import { setCaptainInspection } from './inspection.ts';
 import { cancelCaptainCompaction, carryCaptainFiles, compactCaptain, supportsCaptainCompaction } from './compaction.ts';
 
@@ -47,7 +46,6 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
   const launch = options.launchMain ?? launchMain;
   let enabled = false;
   let generation = 0;
-  const voice = createCaptainVoice(pi.events);
   let store: ReturnType<typeof createTaskStore> | undefined;
   let sessionId: string | undefined;
   let restoredTools: string[] = [];
@@ -78,7 +76,6 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
   };
   const expose = (next: boolean) => {
     if (!next) generation++;
-    voice.setEnabled(next);
     if (enabled !== next) {
       if (next) restoredTools = pi.getActiveTools().filter(name => CHILD_TOOLS.includes(name));
       enabled = next;
@@ -237,7 +234,6 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
 
   pi.on('before_agent_start', async (event, ctx) => {
     if (!enabled) return;
-    voice.refresh();
     let config;
     try { config = loadConfig(paths.configFile); } catch {
       return { systemPrompt: `${event.systemPrompt}\n\nCaptain configuration is invalid. Tell the user to fix `

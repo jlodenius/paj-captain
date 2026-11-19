@@ -91,19 +91,8 @@ it. Explicit `/captain` activation is required. There is no model-callable mode 
 Workspace rules restrict launches, not communication. These are tool-level checks, not an OS
 sandbox. Queued work is not proof of execution; uncertain actions are not automatically repeated.
 
-### Optional voice reports
-
-Install `paj-voice` separately to hear Captain reports; it is not a Captain dependency.
-With Captain and voice enabled, the agent uses `voice_speak` for concise orchestration reports,
-normally one sentence of about 30 words or fewer. Questions, blockers, and results are essential;
-eyes-free mode also includes meaningful assignment/progress updates even when `reporting.progress`
-is false. Detailed screen answers stay unchanged. Raw worker reports and tool narration are not
-spoken automatically. Captain owns task narration; the voice addon may add a brief response-completion
-notice.
-
-The addons discover each other through Pi's versioned event bus in either load order. Turning
-Captain off or replacing/shutting down its session releases its voice reporter registration.
-Without a compatible voice addon, Captain remains text-only.
+Captain reports through ordinary Pi responses. If you use a separate Voice extension, it handles
+speech according to its own settings. No Captain settings migration is needed.
 
 ## Reference
 
@@ -123,5 +112,7 @@ npm test
 
 Git installs build `dist` automatically; rebuild after source changes. Optional integration tests
 use isolated state and local fake providers. Set `PAJ_CAPTAIN_PI_BIN`, `PAJ_CAPTAIN_PAJ_BIN`, and
-`PAJ_CAPTAIN_PAJ_EXTENSION` explicitly to test Pi/Paj; set `PAJ_CAPTAIN_VOICE_DIR` to test voice.
-No sibling checkout is assumed.
+`PAJ_CAPTAIN_PAJ_EXTENSION` explicitly to test Pi/Paj. Set `PAJ_CAPTAIN_VOICE_DIR` to a Voice
+source checkout with dev dependencies to test both extensions together with fake audio. The tests
+use Voice's `tests/fixtures/extension.js` harness (verified against `1676208`). No sibling checkout
+is assumed.
