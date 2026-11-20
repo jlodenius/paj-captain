@@ -9,7 +9,7 @@ import process from 'node:process';
 import { captainPaths, loadConfig, saveConfig } from './config.ts';
 import { createPajClient } from './paj.ts';
 import { createTaskStore } from './tasks.ts';
-import { createLedgerMaintenance, CUTOVER_PHRASE, ERASE_PHRASE } from './ledger-maintenance.ts';
+import { createLedgerMaintenance, ERASE_PHRASE } from './ledger-maintenance.ts';
 import { renderTaskView } from './task-view.ts';
 import { listWorkspaces } from './workspaces.ts';
 import { launchMain } from './launch.ts';
@@ -469,7 +469,7 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
   });
 
   pi.registerCommand('captain', {
-    description: 'Enable Captain here; /captain off|status|settings|tasks|erase-ledgers|establish-ledger-cutover',
+    description: 'Enable Captain here; /captain off|status|settings|tasks|erase-ledgers',
     handler: async (args, ctx) => {
       try {
         const action = args.trim() || 'on';
@@ -489,7 +489,7 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
           const release = activationLease.retain();
           try { ctx.ui.notify((await taskView(ctx)).content[0].text, 'info'); }
           finally { release(); }
-        } else if (action === 'erase-ledgers' || action === 'establish-ledger-cutover') {
+        } else if (action === 'erase-ledgers') {
           if (ctx.mode !== 'tui' || !ctx.hasUI || !ctx.isIdle()) {
             throw new Error('Ledger maintenance requires an idle, interactive Pi terminal');
           }
@@ -501,14 +501,6 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
               throw new Error('Pi session changed during confirmation; start over');
             }
           };
-          if (action === 'establish-ledger-cutover') {
-            const answer = await ctx.ui.input(`Quit all older Pi/SDK runtimes using this installation and use only coordinated versions. Type ${CUTOVER_PHRASE} to attest:`);
-            if (answer !== CUTOVER_PHRASE) return;
-            check();
-            maintenance.establish();
-            ctx.ui.notify('Captain ledger cutover recorded. No task ledgers were erased.', 'info');
-            return;
-          }
           const snapshot = maintenance.preview();
           if (!snapshot.names.length && !snapshot.interrupted) {
             ctx.ui.notify('No saved Captain task ledgers to erase.', 'info');
@@ -522,7 +514,7 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
           check();
           const erased = maintenance.erase(snapshot.digest);
           ctx.ui.notify(`Erased ${erased} Captain task ledgers. Already-sent work continues.`, 'info');
-        } else ctx.ui.notify('Usage: /captain [on|off|status|settings|tasks|erase-ledgers|establish-ledger-cutover]', 'warning');
+        } else ctx.ui.notify('Usage: /captain [on|off|status|settings|tasks|erase-ledgers]', 'warning');
       } catch (error) { ctx.ui.notify(`Captain: ${errorMessage(error)}`, 'error'); }
     },
   });

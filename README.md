@@ -114,12 +114,11 @@ speech according to its own settings. No Captain settings migration is needed.
 
 `/captain erase-ledgers` is an interactive maintenance command, not a model tool. It is only for
 one local installation (`$PI_CODING_AGENT_DIR`) on a filesystem with working local `flock`.
-Before the first use, quit every older Pi or SDK runtime using that directory, reopen only on a
-coordinated version, and record that cutover with `/captain establish-ledger-cutover`. Do not use
-an older version against the same directory afterward. The attestation is an operator prerequisite,
-not proof that an undetectable older process has exited. If mixed use occurs, quiesce again and
-repeat the cutover before attempting erase. Do not replace or remove coordination files while Pi is
-running.
+Use only Captain versions that participate in ledger coordination in that directory. Older,
+uncoordinated Pi or SDK runtimes sharing it are unsupported: they do not take the shared gate
+lock, so that lock cannot detect or block them. If any such runtime uses this directory, quit it
+and stop using it with this installation before attempting erasure. Do not replace or remove
+coordination files while Pi is running.
 
 Turn Captain off in every local Pi session and wait for in-flight work to settle. The command
 previews saved ledger and known unfinished/unresolved task counts. It deletes all saved task ledgers

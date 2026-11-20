@@ -7,13 +7,13 @@ import { MAX_BYTES, securePath, validate } from './tasks.ts';
 import { errorCode } from './types.ts';
 
 const ledgerName = /^[a-zA-Z0-9_-]{1,160}\.json$/;
-const marker = 'captain-ledger-cutover-v1\n';
+// Preserve the published on-disk interruption sentinel even though the attestation is gone.
+const interruptionMarker = 'captain-ledger-cutover-v1\n';
 const scanLimit = 16384;
 const scanBytes = 32 * 1024 ** 3;
 const scanMs = 60000;
 export const WARNING_BYTES = 3 * 1024 ** 3;
 export const ERASE_PHRASE = 'ERASE ALL CAPTAIN LEDGERS';
-export const CUTOVER_PHRASE = 'ALL OLDER CAPTAIN RUNTIMES ARE CLOSED';
 
 function safeFile(fd: number, file: string) {
   const stat = fs.fstatSync(fd);
@@ -45,7 +45,6 @@ function lock(file: string, exclusive: boolean, create: boolean, busy: string) {
 
 export function createLedgerMaintenance(dir: string) {
   const gate = '.captain-ledger-gate';
-  const cutover = '.captain-ledger-cutover-v1';
   const interruption = '.captain-ledger-erase-incomplete';
   const epoch = '.captain-ledger-epoch';
   const busy = 'Captain is enabled or finishing an operation in a local Pi session. Turn Captain off in all sessions and retry when idle.';
@@ -61,17 +60,17 @@ export function createLedgerMaintenance(dir: string) {
   }
   // Linux has no Node unlinkat; use the pinned directory descriptor for every destructive path.
   const anchored = (fd: number) => `/proc/self/fd/${fd}`;
-  function verifyMarker(file: string) {
-    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-    try {
-      if (safeFile(fd, file).size !== marker.length || fs.readFileSync(fd, 'utf8') !== marker) {
-        throw new Error('Unrecognized cutover marker; stop and verify the coordinated installation');
-      }
-    } finally { fs.closeSync(fd); }
-  }
-  function markerExists(file: string) {
-    try { verifyMarker(file); return true; }
+  function eraseInterrupted(base: string) {
+    const file = join(base, interruption);
+    let fd;
+    try { fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); }
     catch (error) { if (errorCode(error) === 'ENOENT') return false; throw error; }
+    try {
+      if (safeFile(fd, file).size !== interruptionMarker.length || fs.readFileSync(fd, 'utf8') !== interruptionMarker) {
+        throw new Error('Unrecognized Captain ledger erasure interruption marker; inspect it offline');
+      }
+      return true;
+    } finally { fs.closeSync(fd); }
   }
   function readEpoch(base: string) {
     const path = join(base, epoch);
@@ -85,7 +84,7 @@ export function createLedgerMaintenance(dir: string) {
       return value;
     } finally { fs.closeSync(fd); }
   }
-  function publishMarker(dirFd: number, name: string, content = marker) {
+  function publishMarker(dirFd: number, name: string, content: string) {
     const base = anchored(dirFd);
     const temporary = join(base, `.captain-marker-${randomUUID()}.tmp`);
     const fd = fs.openSync(temporary, 'wx', 0o600);
@@ -161,21 +160,13 @@ export function createLedgerMaintenance(dir: string) {
     }
     return { names, digest: digest.digest('hex'), tasks, unresolved, files };
   }
-  const missingCutover = 'First run /captain establish-ledger-cutover';
-  function exclusive<T>(fn: (fd: number, base: string) => T, create = false) {
-    let fd: number;
-    try { fd = openDirectory(create); }
-    catch (error) { if (errorCode(error) === 'ENOENT') throw new Error(missingCutover); throw error; }
+  function exclusive<T>(create: boolean, fn: (fd: number, base: string) => T) {
+    const fd = openDirectory(create);
     try {
       const base = anchored(fd);
-      let release;
-      try { release = lock(join(base, gate), true, create, busy); }
-      catch (error) { if (errorCode(error) === 'ENOENT') throw new Error(missingCutover); throw error; }
+      const release = lock(join(base, gate), true, create, busy);
       try { return fn(fd, base); } finally { release(); }
     } finally { fs.closeSync(fd); }
-  }
-  function requireCutover(base: string) {
-    if (!markerExists(join(base, cutover))) throw new Error(missingCutover);
   }
   return {
     lease(expectedEpoch?: string) {
@@ -184,7 +175,7 @@ export function createLedgerMaintenance(dir: string) {
         const base = anchored(fd);
         const release = lock(join(base, gate), false, true, 'Captain ledger maintenance is running; retry when it finishes');
         try {
-          if (markerExists(join(base, interruption))) throw new Error('Captain ledger erasure was interrupted; rerun /captain erase-ledgers while off to review and finish');
+          if (eraseInterrupted(base)) throw new Error('Captain ledger erasure was interrupted; rerun /captain erase-ledgers while off to review and finish');
           const value = readEpoch(base);
           if (expectedEpoch !== undefined && expectedEpoch !== value) {
             throw new Error('Captain ledgers were erased during navigation; run /captain explicitly to start again');
@@ -193,24 +184,16 @@ export function createLedgerMaintenance(dir: string) {
         } catch (error) { release(); throw error; }
       } finally { fs.closeSync(fd); }
     },
-    establish() {
-      return exclusive((fd, base) => {
-        scan(base);
-        if (!markerExists(join(base, cutover))) publishMarker(fd, cutover);
-      }, true);
-    },
     preview() {
-      return exclusive((_fd, base) => {
-        requireCutover(base);
-        const interrupted = markerExists(join(base, interruption));
+      return exclusive(true, (_fd, base) => {
+        const interrupted = eraseInterrupted(base);
         const { names, digest, tasks, unresolved } = scan(base);
         return { names, digest: `${interrupted}:${digest}`, tasks, unresolved, interrupted };
       });
     },
     erase(expected: string) {
-      return exclusive((fd, base) => {
-        requireCutover(base);
-        const interrupted = markerExists(join(base, interruption));
+      return exclusive(false, (fd, base) => {
+        const interrupted = eraseInterrupted(base);
         const snapshot = scan(base);
         if (`${interrupted}:${snapshot.digest}` !== expected) {
           throw new Error('Saved ledgers changed after preview; rerun and confirm again');
@@ -224,7 +207,7 @@ export function createLedgerMaintenance(dir: string) {
           return path;
         };
         for (const [name, expected] of snapshot.files) verifyFile(name, expected);
-        if (!interrupted) publishMarker(fd, interruption);
+        if (!interrupted) publishMarker(fd, interruption, interruptionMarker);
         let erased = 0;
         try {
           publishMarker(fd, epoch, randomUUID());

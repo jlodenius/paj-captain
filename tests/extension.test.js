@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { registerCaptain } from '../src/extension.ts';
 import { saveConfig, captainPaths, loadConfig } from '../src/config.ts';
-import { createLedgerMaintenance, CUTOVER_PHRASE, ERASE_PHRASE } from '../src/ledger-maintenance.ts';
+import { createLedgerMaintenance, ERASE_PHRASE } from '../src/ledger-maintenance.ts';
 
 const Type = Object.fromEntries(['Object', 'String', 'Optional', 'Array', 'Boolean']
   .map(name => [name, value => ({ type: name, value })]));
@@ -82,7 +82,7 @@ test('erase is interactive, requires the exact phrase, and waits for an in-fligh
     return { ...args, id: '30000000-0000-4000-8000-000000000001',
       from: { id: self.id, name: self.name }, to: worker.id, createdAtMs: 1 };
   } } });
-  let confirmation = CUTOVER_PHRASE;
+  let confirmation = ERASE_PHRASE;
   const prompts = [];
   f.ctx.hasUI = true;
   f.ctx.isIdle = () => true;
@@ -93,6 +93,12 @@ test('erase is interactive, requires the exact phrase, and waits for an in-fligh
   assert.equal(prompts.length, 0);
   f.ctx.mode = 'tui';
   await f.command('establish-ledger-cutover');
+  assert.match(f.notices.at(-1)[0], /^Usage: /);
+  assert.doesNotMatch(f.notices.at(-1)[0], /cutover/);
+  assert.equal(prompts.length, 0);
+  await f.command('erase-ledgers');
+  assert.match(f.notices.at(-1)[0], /No saved Captain task ledgers/);
+  assert.equal(prompts.length, 0);
   await f.command('on');
   const inFlight = f.tool('captain_delegate', { recipient: worker.id, assignment: 'Finish the review.' });
   await sent;
@@ -101,7 +107,7 @@ test('erase is interactive, requires the exact phrase, and waits for an in-fligh
   await f.command('off');
   await f.command('erase-ledgers');
   assert.match(f.notices.at(-1)[0], /finishing an operation/);
-  assert.equal(prompts.length, 1);
+  assert.equal(prompts.length, 0);
   settle();
   assert.equal((await inFlight).details.status, 'queued');
   const maintenance = createLedgerMaintenance(f.paths.stateDir);
@@ -127,10 +133,32 @@ test('erase is interactive, requires the exact phrase, and waits for an in-fligh
   await f.command('off');
 });
 
+test('an interrupted erase still requires confirmation when no ledgers remain', async t => {
+  const f = fixture(t);
+  const maintenance = createLedgerMaintenance(f.paths.stateDir);
+  assert.equal(maintenance.preview().names.length, 0);
+  const interrupted = join(f.paths.stateDir, '.captain-ledger-erase-incomplete');
+  writeFileSync(interrupted, 'captain-ledger-cutover-v1\n', { mode: 0o600 });
+  f.ctx.mode = 'tui';
+  f.ctx.hasUI = true;
+  f.ctx.isIdle = () => true;
+  const prompts = [];
+  let confirmation;
+  f.ctx.ui.input = async title => { prompts.push(title); return confirmation; };
+  await f.command('erase-ledgers');
+  assert.match(prompts.at(-1), /prior erasure was interrupted.*ALL 0 saved Captain task ledgers/);
+  assert.throws(() => maintenance.lease(), /interrupted/);
+  confirmation = ERASE_PHRASE;
+  await f.command('erase-ledgers');
+  assert.equal(prompts.length, 2);
+  assert.match(f.notices.at(-1)[0], /Erased 0 Captain task ledgers/);
+  assert.ok(!existsSync(interrupted));
+  maintenance.lease()();
+});
+
 test('a confirmed erase during runtime replacement cancels the old ON handoff', async t => {
   const f = fixture(t);
   const maintenance = createLedgerMaintenance(f.paths.stateDir);
-  maintenance.establish();
   await f.command('on');
   const task = (await f.tool('captain_delegate', { recipient: worker.id, assignment: 'Review.' })).details;
   await f.tool('captain_tasks');
