@@ -199,6 +199,7 @@ async function fixture(t, { split = false, automatic = false } = {}) {
     return existsSync(dir) ? readdirSync(dir).filter(name => name.endsWith('.json'))
       .map(name => [name, readFileSync(join(dir, name), 'utf8')]) : [];
   };
+  const ledgerTasks = () => ledgerFiles().map(([name, json]) => [name, JSON.parse(json).tasks]);
   async function enable() {
     const notices = await command('/captain');
     assert.ok(notices.some(event => event.message.startsWith('Captain enabled')), JSON.stringify({ notices, errors, events }));
@@ -222,11 +223,11 @@ async function fixture(t, { split = false, automatic = false } = {}) {
     store.observe([question]);
     store.prepareReply(task.id, { questionId: question.id, text: 'Review must finish first.' });
     store.markReplyUnknown(task.id, { questionId: question.id, error: 'Historical reply timeout' });
-    const snapshot = ledgerFiles();
+    const snapshot = ledgerTasks();
     assert.equal(snapshot.length, 1);
     return snapshot;
   }
-  return { request, command, prompt, requests, entries, preparations, enable, ledgerFiles, events,
+  return { request, command, prompt, requests, entries, preparations, enable, ledgerFiles, ledgerTasks, events,
     seedUncertainTask, fail: value => { failure = value; }, root, agent,
     holdSummary: () => new Promise(resolve => { heldSummary = resolve; }) };
 }
@@ -312,7 +313,7 @@ test('real Pi persists guided manual and repeated compactions, requires activati
     assertGuided(summaryRequests);
     assert.ok(userText(summaryRequests[0]).includes(firstEntry.summary),
       'Repeated compaction must include the previous summary');
-    assert.deepEqual(f.ledgerFiles(), ledger, 'Compaction must not rewrite durable assignments');
+    assert.deepEqual(f.ledgerTasks(), ledger, 'Compaction must not rewrite durable assignments');
     assert.ok(!existsSync(join(f.agent, 'captain', 'launches')), 'No launches while compacting');
     assert.ok(!f.events.some(event => event.type === 'tool_execution_start'), 'No history tool replay');
     assert.ok(!existsSync(join(f.root, 'draft.md')), 'Historical write was not executed');
@@ -359,7 +360,7 @@ test('real Pi automatic threshold compaction uses guided hook and does not repla
     assert.equal(summaryRequests.length, 1);
     assertGuided(summaryRequests);
     assert.equal(f.requests.filter(value => !value.summary).length, 1, 'Only one continued model request');
-    assert.deepEqual(f.ledgerFiles(), ledger);
+    assert.deepEqual(f.ledgerTasks(), ledger);
     assert.ok(!f.events.some(event => event.type === 'tool_execution_start'));
     assert.ok(!existsSync(join(f.agent, 'captain', 'launches')));
   });

@@ -69,9 +69,15 @@ export interface Task {
   deliveryError?: string;
 }
 
+export interface PajCheckpoint {
+  registration: string;
+  cursor: string;
+}
+
 export interface Ledger {
   version: 1;
   tasks: Task[];
+  pajCheckpoints?: PajCheckpoint[];
 }
 
 export interface LaunchRequest {

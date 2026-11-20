@@ -1,9 +1,9 @@
-import { errorCode, type Ledger, type Task, type PajMessage, type PajSession } from './types.ts';
+import { errorCode, type Ledger, type Task, type PajMessage, type PajSession, type PajCheckpoint } from './types.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { validMessage, validSession } from './paj.ts';
+import { PAGE_LIMIT, validCursor, validMessage, validSession } from './paj.ts';
 
 const MAX_TASKS = 128;
 const MAX_SEEN = 512;
@@ -41,9 +41,16 @@ function securePath(file: string) {
   return absolute;
 }
 
+function validCheckpoint(value: PajCheckpoint): boolean {
+  return exactId(value?.registration) && validCursor(value.cursor);
+}
+
 function validate(state: Ledger): Ledger {
   if (!state || state.version !== 1 || !Array.isArray(state.tasks)
-      || state.tasks.length > MAX_TASKS) throw new Error('Corrupt task ledger');
+      || state.tasks.length > MAX_TASKS || (state.pajCheckpoints !== undefined
+        && (!Array.isArray(state.pajCheckpoints) || state.pajCheckpoints.length > 128
+          || !state.pajCheckpoints.every(validCheckpoint)
+          || new Set(state.pajCheckpoints.map(value => value.registration)).size !== state.pajCheckpoints.length))) throw new Error('Corrupt task ledger');
   const ids = new Set();
   const requests = new Set();
   const owner = state.tasks[0]?.ownerPiSessionId;
@@ -254,9 +261,27 @@ export function createTaskStore(file: string, { now = Date.now, id = randomUUID 
         }
       });
     },
-    observe(messages: readonly unknown[]) {
+    checkpoint(registration: string) {
+      securePath(file);
+      return load().pajCheckpoints?.find(value => value.registration === registration);
+    },
+    observe(messages: readonly unknown[], page?: { expected?: PajCheckpoint; next: PajCheckpoint }) {
       if (!Array.isArray(messages) || messages.length > 40000) throw new Error('Invalid observations');
+      if (page && (!validCheckpoint(page.next) || messages.length > PAGE_LIMIT
+          || messages.some(message => !validMessage(message) || message.to !== page.next.registration))) {
+        throw new Error('Invalid checkpointed observations');
+      }
       return transact(state => {
+        if (page) {
+          const checkpoints = state.pajCheckpoints ??= [];
+          const index = checkpoints.findIndex(value => value.registration === page.next.registration);
+          if (checkpoints[index]?.cursor !== page.expected?.cursor
+              || (page.expected && page.expected.registration !== page.next.registration)) {
+            throw new Error('Captain refresh checkpoint changed');
+          }
+          if (index === -1) checkpoints.push(page.next);
+          else checkpoints[index] = page.next;
+        }
         const changed = new Set<Task>();
         const incoming = new Map(messages.filter(validMessage).map(message => [message.id, message]));
         const replacements: { task: Task; message: PajMessage }[] = [];
@@ -270,9 +295,16 @@ export function createTaskStore(file: string, { now = Date.now, id = randomUUID 
             original = task.questions.find(value => value.id === message.supersedes)
               ?? task.events.find(value => value.id === message.supersedes)
               ?? incoming.get(message.supersedes);
-            if (!exactId(message.supersedes) || !original || original.id === message.id
-                || !correlated(original, task) || original.createdAtMs > message.createdAtMs
-                || (original.supersededBy && original.supersededBy !== message.id)) continue;
+            const invalid = !exactId(message.supersedes) || message.supersedes === message.id
+              || (original && (!correlated(original, task)
+                || (original.supersededBy && original.supersededBy !== message.id)));
+            if (invalid) {
+              if (page) throw new Error('Invalid supersession in Paj message page');
+              continue;
+            }
+            // Indexed Paj writes validate the relationship before enqueue. Optional predecessors
+            // may already have fallen out of the event window, and wall clocks may run backward.
+            if (!page && (!original || original.createdAtMs > message.createdAtMs)) continue;
           }
           if (task.seenMessageIds.includes(message.id)
               || task.questions.some(question => question.id === message.id)

@@ -33,7 +33,8 @@ function fixture(t, overrides = {}) {
     self: async id => { calls.push(['self', id]); return self; },
     listMain: async () => [worker],
     resolveMain: async name => { if (name !== worker.id && name !== worker.name) throw new Error('Not a live main agent'); return worker; },
-    incoming: async () => messages,
+    readPage: async (_id, after) => ({ status: 'ok', nextCursor: String(messages.length), hasMore: false,
+      messages: messages.slice(Number(after ?? 0)) }),
     send: async args => { calls.push(['send', args]); return { id: '30000000-0000-4000-8000-000000000001',
       from: { id: self.id, name: self.name }, to: args.recipient, text: args.text, kind: args.kind,
       taskId: args.taskId, inReplyTo: args.inReplyTo, createdAtMs: Date.now() }; },
@@ -428,9 +429,11 @@ test('task views show capacity, questions, uncertainty, reported results and las
   const messages = [];
   const f = fixture(t, { client: {
     self: async () => { if (unavailable) throw new Error('Paj unavailable'); return registration; },
-    incoming: async () => {
-      if (historyFailed) throw new Error('History too large');
-      return recordFailed ? new Array(40001).fill(null) : messages;
+    readPage: async (id, after) => {
+      if (historyFailed) throw new Error('Paj read unavailable');
+      const available = id === self.id ? messages : [];
+      return { status: 'ok', nextCursor: String(available.length), hasMore: false,
+        messages: recordFailed ? [{ to: 'wrong-recipient' }] : available.slice(Number(after ?? 0)) };
     },
     send: async () => { throw new Error('Dispatch timed out'); },
   } });
@@ -480,6 +483,58 @@ test('task views show capacity, questions, uncertainty, reported results and las
   await assert.rejects(f.tool('captain_reply', { taskId: task.id, questionId, answer: 'Retry.' }), /Paj unavailable/);
   await f.command('off');
   await assert.rejects(f.tool('captain_tasks'), /disabled/);
+});
+
+test('indexed refresh resumes bounded backlog and fails closed on a source gap without legacy fallback', async t => {
+  let task;
+  let reset = false;
+  const cursors = [];
+  const f = fixture(t, { client: {
+    readPage: async (_recipient, after) => {
+      cursors.push(after);
+      if (reset) return { status: 'gap', reason: 'reset' };
+      const n = Number(after ?? 0) + 1;
+      return { status: 'ok', nextCursor: String(n), hasMore: n < 6, messages: [{
+        id: `30000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
+        from: { id: worker.id, name: worker.name }, to: self.id, taskId: task.id,
+        kind: n === 1 ? 'question' : n === 6 ? 'result' : 'update', text: `message ${n}`, createdAtMs: n,
+      }] };
+    },
+  } });
+  await f.command('on');
+  task = (await f.tool('captain_delegate', { recipient: worker.id, assignment: 'Review.' })).details;
+  const view = async () => JSON.parse((await f.tool('captain_tasks')).content[0].text);
+  const partial = await view();
+  assert.equal(partial.freshness.reason, 'paj_catchup_in_progress');
+  assert.equal(partial.tasks[0].unansweredQuestions, 1);
+  assert.deepEqual(cursors, [undefined, '1', '2', '3']);
+  const caughtUp = await view();
+  assert.equal(caughtUp.freshness.status, 'refreshed');
+  assert.equal(caughtUp.tasks[0].reportedOutcome, 'message 6');
+  reset = true;
+  assert.equal((await view()).freshness.reason, 'paj_reset');
+  await assert.rejects(f.tool('captain_reply', { taskId: task.id, questionId: 'unknown', answer: 'No.' }), /paj_reset/);
+  assert.deepEqual(cursors, [undefined, '1', '2', '3', '4', '5', '6', '6']);
+  assert.equal(f.calls.filter(call => call[0] === 'send').length, 1);
+});
+
+test('a terminal page does not mark a replaced registration current', async t => {
+  const replacement = { ...self, id: '10000000-0000-4000-8000-000000000009' };
+  let registration = self;
+  const cursors = [];
+  const f = fixture(t, { client: {
+    self: async () => registration,
+    readPage: async (id, after) => {
+      cursors.push([id, after]);
+      registration = replacement;
+      return { status: 'ok', messages: [], nextCursor: `zero-${id}`, hasMore: false };
+    },
+  } });
+  await f.command('on');
+  const view = async () => JSON.parse((await f.tool('captain_tasks')).content[0].text);
+  assert.equal((await view()).freshness.reason, 'paj_registration_changed');
+  assert.equal((await view()).freshness.pajRegistration, replacement.id);
+  assert.deepEqual(cursors, [[self.id, undefined], [replacement.id, undefined]]);
 });
 
 test('a large exact task view stays bounded and preserves private full details', async t => {

@@ -61,13 +61,22 @@ test('send passes exact sender/recipient and validates echoed correlation', asyn
     taskId: 'assignment', inReplyTo: a }));
 });
 
-test('incoming reads history plus pending, deduplicates, never acknowledges', async () => {
+test('paged reads validate recipient, progression, output limit and CLI failures', async () => {
+  const valid = { status: 'ok', messages: [message()], nextCursor: 'next', hasMore: true };
   const calls = [];
-  const client = createPajClient({ run: runner(args => args[2] === 'history'
-    ? [message()] : [message(), message({ id: b, createdAtMs: 2 })], calls) });
-  assert.deepEqual((await client.incoming(a)).map(value => value.id), [c, b]);
-  assert.deepEqual(calls.map(call => call.args[2]).sort(), ['history', 'pending']);
-  await assert.rejects(createPajClient({ run: runner([message({ to: b })]) }).incoming(a));
-  await assert.rejects(createPajClient({ run: runner(args => [message({
-    text: args[2] === 'history' ? 'one' : 'two' })]) }).incoming(a));
+  assert.deepEqual(await createPajClient({ run: runner(valid, calls) }).readPage(a, 'before'), valid);
+  assert.deepEqual(calls[0].args, ['--json', 'message', 'read', a, '--limit', '128', '--after', 'before']);
+  assert.ok(calls[0].options.maxBuffer <= 1024 ** 2 + 1);
+  const reset = { status: 'gap', reason: 'reset' };
+  assert.deepEqual(await createPajClient({ run: runner(reset) }).readPage(a, 'before'), reset);
+  for (const bad of [{ ...valid, messages: [message({ to: b })] }, { ...valid, messages: [message(), message()] },
+    { ...valid, messages: [] }, { ...valid, nextCursor: 'before' }]) {
+    await assert.rejects(createPajClient({ run: runner(bad) }).readPage(a, 'before'), /Invalid Paj message page/);
+  }
+  const unsupported = createPajClient({ run: async () => { throw Object.assign(new Error('clap'),
+    { code: 2, stderr: "error: unrecognized subcommand 'read'\n" }); } });
+  await assert.rejects(unsupported.readPage(a), /clap/);
+  const broken = createPajClient({ run: async () => { throw Object.assign(new Error('locked'),
+    { code: 2, stderr: 'lock unavailable\n' }); } });
+  await assert.rejects(broken.readPage(a), /locked/);
 });

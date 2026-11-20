@@ -31,7 +31,8 @@ function fixture(t, failAnswers = false) {
   const ctx = { cwd: root, ui: { setStatus() {}, notify() {} }, waitForIdle: async () => {},
     sessionManager: { getSessionId: () => owner.piSessionId, getBranch: () => [] } };
   const client = { self: async () => owner, resolveMain: async () => worker,
-    incoming: async () => incoming, listMain: async () => [worker], send: async args => {
+    readPage: async (_id, after) => ({ status: 'ok', nextCursor: String(incoming.length), hasMore: false,
+      messages: incoming.slice(Number(after ?? 0)) }), listMain: async () => [worker], send: async args => {
       sent.push(args);
       if (failAnswers && args.kind === 'answer') throw new Error('Uncertain answer timeout');
       return { id: randomUUID(), from: { id: owner.id, name: owner.name }, to: worker.id,
@@ -78,14 +79,15 @@ test('questions, duplicate answers and terminal results stay correlated through 
   assert.equal(f.sent.length, 2);
 });
 
-test('the incoming Paj batch updates the ledger even if history/pending race with acknowledgement', async t => {
+test('a delivered conversation envelope cannot overtake an indexed page', async t => {
   const f = fixture(t);
   await f.enable();
   const task = await f.tool('captain_delegate', { recipient: f.worker.id, assignment: 'Finite task' });
   const report = f.message(task, 'result', 'Completed with checks.');
   await f.handlers.get('before_agent_start')({ systemPrompt: 'Original', messageType: 'custom',
     message: { customType: 'paj-messages', details: { messages: [report] } } }, f.ctx);
-  assert.equal(f.incoming.length, 0);
+  assert.equal((await f.tool('captain_tasks', { taskId: task.id })).status, 'queued');
+  f.incoming.push(report);
   assert.equal((await f.tool('captain_tasks', { taskId: task.id })).status, 'completed');
 });
 

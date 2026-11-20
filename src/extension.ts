@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, ToolDefinition, compact } from '@earendil-works/pi-coding-agent';
 import type { Type as SchemaType, TSchema, Static } from 'typebox';
-import { errorMessage, isRecord } from './types.ts';
+import { errorMessage } from './types.ts';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -15,6 +15,7 @@ import { setCaptainInspection } from './inspection.ts';
 import { cancelCaptainCompaction, carryCaptainFiles, compactCaptain, supportsCaptainCompaction } from './compaction.ts';
 
 const MODE_ENTRY = 'paj-captain-mode';
+const MAX_REFRESH_PAGES = 4;
 const CHILD_TOOLS = ['spawn_sub_agent', 'list_sub_agents', 'assign_subagent_task', 'complete_subagent_task'];
 const SKILL = fileURLToPath(new URL(import.meta.url.endsWith('.ts')
   ? '../skills/paj-captain/SKILL.md' : '../../skills/paj-captain/SKILL.md', import.meta.url));
@@ -70,10 +71,44 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
     loadConfig(paths.configFile);
     return client.self(identity(ctx));
   };
-  const refresh = async (ctx: ExtensionContext) => {
-    const self = await active(ctx);
-    ledger(ctx).observe(await client.incoming(self.id));
-    return self;
+  const refresh = async (ctx: ExtensionContext, signal?: AbortSignal) => {
+    if (!enabled) throw new Error('Captain is off');
+    loadConfig(paths.configFile);
+    const id = identity(ctx);
+    const start = generation;
+    const check = () => {
+      signal?.throwIfAborted();
+      if (!enabled || generation !== start || identity(ctx) !== id) throw new Error('Captain session changed or is off');
+    };
+    const failed = (reason: string) => ({ status: 'last_known' as const, reason });
+    let self;
+    try { self = await client.self(id); }
+    catch { check(); return failed('paj_read_failed'); }
+    check();
+    const store = ledger(ctx);
+    let expected = store.checkpoint(self.id);
+    for (let i = 0; i < MAX_REFRESH_PAGES; i++) {
+      let page;
+      try { page = await client.readPage(self.id, expected?.cursor); }
+      catch { check(); return failed('paj_read_failed'); }
+      check();
+      if (page.status === 'gap') return failed(`paj_${page.reason}`);
+      const next = { registration: self.id, cursor: page.nextCursor };
+      if (!expected || page.messages.length) {
+        try { store.observe(page.messages, { expected, next }); }
+        catch { return failed('ledger_recording_failed'); }
+      }
+      expected = next;
+      if (!page.hasMore) {
+        let current;
+        try { current = await client.self(id); }
+        catch { check(); return failed('paj_read_failed'); }
+        check();
+        if (current.id !== self.id) return failed('paj_registration_changed');
+        return { status: 'refreshed' as const, self };
+      }
+    }
+    return failed('paj_catchup_in_progress');
   };
   const taskView = async (ctx: ExtensionContext, taskId?: string, signal?: AbortSignal) => {
     const id = identity(ctx);
@@ -83,23 +118,13 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
       if (!enabled || generation !== start || identity(ctx) !== id) throw new Error('Captain session changed or is off');
     };
     check();
-    loadConfig(paths.configFile);
     const attemptedAt = new Date().toISOString();
-    const store = ledger(ctx);
-    let refreshedRegistration: string | undefined;
-    let failure: 'paj_read_failed' | 'ledger_recording_failed' = 'paj_read_failed';
-    try {
-      const self = await client.self(id);
-      const messages = await client.incoming(self.id);
-      check();
-      failure = 'ledger_recording_failed';
-      store.observe(messages);
-      refreshedRegistration = self.id;
-    } catch { check(); }
-    const freshness = refreshedRegistration
-      ? { status: 'refreshed', attemptedAt, pajRegistration: refreshedRegistration }
-      : { status: 'last_known', attemptedAt, reason: failure };
-    const { tasks, capacity } = store.snapshot();
+    const observed = await refresh(ctx, signal);
+    check();
+    const refreshedRegistration = observed.status === 'refreshed' ? observed.self.id : undefined;
+    const freshness = observed.status === 'last_known' ? { ...observed, attemptedAt }
+      : { status: observed.status, attemptedAt, pajRegistration: observed.self.id };
+    const { tasks, capacity } = ledger(ctx).snapshot();
     const task = taskId ? tasks.find(value => value.id === taskId) : undefined;
     if (taskId && !task) throw new Error(freshness.status === 'last_known'
       ? 'Unknown Captain assignment in the saved ledger; refresh failed' : 'Unknown Captain assignment');
@@ -107,7 +132,7 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
       freshness,
       capacity,
       guidance: 'Both remaining task slots and bytes matter. A new Pi session has a separate ledger for genuinely new work; never repeat uncertain work.',
-      evidence: 'An enqueue receipt is not execution. A result is a worker report, not verified success. Refresh reads pending and history for the current Paj registration only; it does not prove completeness, conversation delivery or live activity.',
+      evidence: 'An enqueue receipt is not execution. A result is a worker report, not verified success. Refresh covers the current Paj registration only. Earlier registrations are last known. No view attests conversation delivery or live activity.',
     };
     return renderTaskView(header, task ? [task] : tasks, refreshedRegistration, task);
   };
@@ -178,15 +203,18 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
   add('captain_reply', 'Answer a tracked worker question using its exact message ID. Use only after obtaining the needed answer; uncertain replies must not be resent automatically.',
     Type.Object({ taskId: Type.String(), questionId: Type.String(), answer: Type.String({ minLength: 1, maxLength: 16384 }) }),
     async (_requestId, params, ctx, signal) => {
-      const self = await refresh(ctx);
+      const observed = await refresh(ctx, signal);
+      if (observed.status === 'last_known') throw new Error(`Cannot safely reply: ${observed.reason}`);
+      const self = observed.self;
       signal?.throwIfAborted();
       if (!enabled) throw new Error('Captain was disabled');
       const tasks = ledger(ctx);
+      const task = tasks.get(params.taskId);
+      if (!task) throw new Error('Unknown Captain assignment');
+      if (task.ownerPajSessionId !== self.id) throw new Error('Question belongs to an earlier Paj registration; no reply sent');
       const intent = tasks.prepareReply(params.taskId, { questionId: params.questionId, text: params.answer });
       if (intent.reused) return intent;
       try {
-        const task = tasks.get(params.taskId);
-        if (!task) throw new Error('Unknown Captain assignment');
         const message = await client.send({ from: self.id, recipient: task.target.id,
           text: params.answer, kind: 'answer', taskId: task.id, inReplyTo: params.questionId });
         return tasks.recordReply(task.id, { questionId: params.questionId, message });
@@ -271,12 +299,12 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
       return { systemPrompt: `${event.systemPrompt}\n\nCaptain configuration is invalid. Tell the user to fix `
         + `${JSON.stringify(paths.configFile)} before coordinating work. Do not launch or delegate around the failed checks.` };
     }
-    if (event.messageType === 'custom' && event.message?.customType === 'paj-messages'
-      && isRecord(event.message.details) && Array.isArray(event.message.details.messages)) {
-      try { ledger(ctx).observe(event.message.details.messages); } catch {}
-    }
-    let freshness = 'Paj messages refreshed.';
-    try { await refresh(ctx); } catch { freshness = 'Paj refresh failed; report task state as last known, not current.'; }
+    let freshness = 'Paj refresh failed; report task state as last known, not current.';
+    try {
+      const observed = await refresh(ctx);
+      freshness = observed.status === 'refreshed' ? 'Current Paj registration caught up as of the last page.'
+        : `Paj refresh incomplete (${observed.reason}); report task state as last known.`;
+    } catch {}
     let tasks: { id: string; status: string; target: string }[] = [];
     try { tasks = ledger(ctx).list().slice(-30).map(task => ({ id: task.id, status: task.status, target: task.target.id })); }
     catch { freshness = 'Captain ledger unavailable. Report this problem; never repeat uncertain assignments.'; }

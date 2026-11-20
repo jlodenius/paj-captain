@@ -48,6 +48,39 @@ test('intent precedes send, IDs persist, retries conflict and prepared restart i
   assert.equal(reopened.get(task.id).assignment, input.assignment);
 });
 
+test('page observations and checkpoint commit together and stale readers cannot rewind', t => {
+  const { store, file } = fixture(t);
+  const task = store.begin(input);
+  const first = { registration: owner, cursor: 'first' };
+  const second = { registration: owner, cursor: 'second' };
+  const question = message(task, { kind: 'question', text: 'Which document?' });
+  store.observe([question], { next: first });
+  const reopened = createTaskStore(file);
+  assert.deepEqual(reopened.checkpoint(owner), first);
+  assert.equal(reopened.get(task.id).questions[0].id, question.id);
+  const report = message(task, { kind: 'result' });
+  assert.throws(() => store.observe([report], { next: second }), /checkpoint changed/);
+  assert.deepEqual(reopened.checkpoint(owner), first);
+  assert.equal(reopened.get(task.id).result, null);
+  store.observe([question, report], { expected: first, next: second });
+  assert.deepEqual(reopened.checkpoint(owner), second);
+  assert.equal(reopened.get(task.id).result.id, report.id);
+  assert.equal(reopened.get(task.id).questions.length, 1);
+});
+
+test('indexed supersession survives bounded event eviction and a backward wall clock', t => {
+  const { store } = fixture(t);
+  const task = store.begin(input);
+  const first = { registration: owner, cursor: 'old' };
+  const original = message(task, { createdAtMs: 100 });
+  store.observe([original, ...Array.from({ length: 64 }, () => message(task))], { next: first });
+  assert.ok(!store.get(task.id).events.some(event => event.id === original.id));
+  const replacement = message(task, { kind: 'question', supersedes: original.id, createdAtMs: 90 });
+  store.observe([replacement], { expected: first, next: { registration: owner, cursor: 'current' } });
+  assert.equal(store.get(task.id).questions[0].id, replacement.id);
+  assert.equal(store.checkpoint(owner).cursor, 'current');
+});
+
 test('send uncertainty persists, session stores stay separate, no fabricated started state', t => {
   const { store, file } = fixture(t);
   const task = store.begin(input);

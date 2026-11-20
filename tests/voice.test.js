@@ -23,7 +23,8 @@ async function pair(t) {
   const ctx = { ...voice.ctx, cwd: root, waitForIdle: async () => {},
     sessionManager: { ...voice.ctx.sessionManager, getBranch: () => entries } };
   const options = { paths: captainPaths({ PI_CODING_AGENT_DIR: root }),
-    client: { self: async () => ({ id: 'captain-paj' }), incoming: async () => [] } };
+    client: { self: async () => ({ id: '10000000-0000-4000-8000-000000000001' }),
+      readPage: async () => ({ status: 'ok', messages: [], nextCursor: 'zero', hasMore: false }) } };
   let active = ['read', ...voice.tools.keys()];
   const pi = { events: voice.pi.events, on: (name, handler) => handlers.set(name, handler),
     registerTool() {}, registerCommand: (name, command) => commands.set(name, command),

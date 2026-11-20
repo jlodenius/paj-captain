@@ -88,6 +88,16 @@ shows unanswered questions, uncertain sends and replies, reported outcomes, and 
 and bytes in this Pi session’s ledger. If Paj refresh fails, the view labels saved data as last
 known. Use `captain_tasks` with an exact task ID for full retained details. An enqueue or a worker
 report does not verify execution or success.
+
+Task refresh requires a Paj version with `paj message read`. Upgrade all Paj participants together
+and start with a new empty `PAJ_RUNTIME_DIR`; old or mixed-writer runtimes are not supported for
+paged refresh. Captain reads bounded pages without acknowledging messages and saves progress
+with the observations, so another refresh can continue a backlog. An incomplete read or history
+gap leaves saved data last known and blocks tracked replies until refresh is verified. Older
+registrations and their messages are not migrated or deleted; check them separately using Paj’s
+existing history tools. A new registration is not a continuation of the old inbox, and old
+assignments are not resent.
+
 `/captain off` restores ordinary mode without stopping workers. Captain always starts OFF after
 startup, resume, fork, switch, reload, or history navigation; historic mode entries never reactivate
 it. Explicit `/captain` activation is required. There is no model-callable mode tool.

@@ -6,6 +6,14 @@ import { isRecord, type PajSession, type PajMessage, type MessageKind, type RunC
 const exec = promisify(execFile);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const kinds = new Set(['request', 'question', 'answer', 'update', 'result']);
+const gapReasons = new Set(['unindexed', 'reset', 'changed', 'missing', 'oversized', 'invalid']);
+export const PAGE_LIMIT = 128;
+const PAGE_BYTES = 1024 * 1024;
+export function validCursor(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 96 && /^[\x21-\x7e]+$/.test(value);
+}
+export type PajPage = { status: 'ok'; messages: PajMessage[]; nextCursor: string; hasMore: boolean }
+  | { status: 'gap'; reason: string };
 const nonempty = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
 const isId = (value: unknown): value is string => typeof value === 'string' && uuid.test(value);
 
@@ -28,12 +36,12 @@ export function validMessage(value: unknown): value is PajMessage {
 export function createPajClient({ run = exec, cwd, env = process.env }: {
   run?: RunCommand; cwd?: string; env?: NodeJS.ProcessEnv;
 } = {}) {
-  async function call(args: string[]): Promise<unknown> {
+  async function call(args: string[], maxBuffer = 8 * 1024 * 1024, timeout = 15000): Promise<unknown> {
     const result = await run('paj', ['--json', ...args], {
-      cwd, env, timeout: 15000, maxBuffer: 8 * 1024 * 1024, encoding: 'utf8',
+      cwd, env, timeout, maxBuffer, encoding: 'utf8',
     });
     if (result?.exitCode || result?.exit_code || typeof result?.stdout !== 'string'
-        || Buffer.byteLength(result.stdout) > 8 * 1024 * 1024) {
+        || Buffer.byteLength(result.stdout) > maxBuffer) {
       throw new Error('Paj CLI failed or exceeded output limit');
     }
     try { return JSON.parse(result.stdout); }
@@ -87,25 +95,20 @@ export function createPajClient({ run = exec, cwd, env = process.env }: {
       }
       return message;
     },
-    async incoming(pajSessionId: string) {
-      if (!isId(pajSessionId)) throw new Error('Exact Paj session ID required');
-      const batches = await Promise.all(['history', 'pending'].map(async command => {
-        const values = await call(['message', command, pajSessionId]);
-        if (!Array.isArray(values) || values.length > 20000
-            || values.some(value => !validMessage(value) || value.to !== pajSessionId)) {
-          throw new Error('Invalid Paj inbox');
-        }
-        return values.filter(validMessage);
-      }));
-      const messages = new Map<string, PajMessage>();
-      for (const value of batches.flat()) {
-        if (messages.has(value.id) && JSON.stringify(messages.get(value.id)) !== JSON.stringify(value)) {
-          throw new Error('Conflicting Paj message identity');
-        }
-        messages.set(value.id, value);
+    async readPage(pajSessionId: string, after?: string): Promise<PajPage> {
+      if (!isId(pajSessionId) || (after !== undefined && !validCursor(after))) throw new Error('Invalid Paj read position');
+      const page = await call(['message', 'read', pajSessionId, '--limit', String(PAGE_LIMIT),
+        ...(after === undefined ? [] : ['--after', after])], PAGE_BYTES, 5000);
+      if (isRecord(page) && page.status === 'gap' && typeof page.reason === 'string' && gapReasons.has(page.reason)) {
+        return { status: 'gap', reason: page.reason };
       }
-      return [...messages.values()].sort((a, b) => a.createdAtMs - b.createdAtMs
-        || a.id.localeCompare(b.id));
+      if (!isRecord(page) || page.status !== 'ok' || !validCursor(page.nextCursor) || typeof page.hasMore !== 'boolean'
+          || !Array.isArray(page.messages) || page.messages.length > PAGE_LIMIT
+          || page.messages.some(message => !validMessage(message) || message.to !== pajSessionId)
+          || new Set(page.messages.map(message => message.id)).size !== page.messages.length
+          || (page.messages.length === 0 && (page.hasMore || (after !== undefined && after !== page.nextCursor)))
+          || (page.messages.length !== 0 && after === page.nextCursor)) throw new Error('Invalid Paj message page');
+      return { status: 'ok', messages: page.messages, nextCursor: page.nextCursor, hasMore: page.hasMore };
     },
   };
 }
