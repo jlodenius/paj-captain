@@ -8,7 +8,7 @@ import { PAGE_LIMIT, validCursor, validMessage, validSession } from './paj.ts';
 const MAX_TASKS = 128;
 const MAX_SEEN = 512;
 const MAX_QUESTIONS = 64;
-const MAX_BYTES = 16 * 1024 * 1024;
+export const MAX_BYTES = 16 * 1024 * 1024;
 const statuses = new Set(['prepared', 'queued', 'delivery_unknown', 'waiting_for_answer', 'completed']);
 const replyStatuses = new Set(['prepared', 'queued', 'delivery_unknown']);
 const clone = <T>(value: T): T => structuredClone(value);
@@ -23,13 +23,13 @@ const boundedText = (value: string) => {
   return result;
 };
 
-function securePath(file: string) {
+export function securePath(file: string, create = true) {
   const absolute = path.resolve(file);
   const parent = path.dirname(absolute);
   let current = path.parse(parent).root;
   for (const part of parent.slice(current.length).split(path.sep).filter(Boolean)) {
     current = path.join(current, part);
-    try { fs.mkdirSync(current, { mode: 0o700 }); }
+    try { if (create) fs.mkdirSync(current, { mode: 0o700 }); }
     catch (error) { if (errorCode(error) !== 'EEXIST') throw error; }
     const stat = fs.lstatSync(current);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe ledger directory');
@@ -45,7 +45,7 @@ function validCheckpoint(value: PajCheckpoint): boolean {
   return exactId(value?.registration) && validCursor(value.cursor);
 }
 
-function validate(state: Ledger): Ledger {
+export function validate(state: Ledger): Ledger {
   if (!state || state.version !== 1 || !Array.isArray(state.tasks)
       || state.tasks.length > MAX_TASKS || (state.pajCheckpoints !== undefined
         && (!Array.isArray(state.pajCheckpoints) || state.pajCheckpoints.length > 128

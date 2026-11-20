@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { captainPaths, loadConfig, saveConfig } from './config.ts';
 import { createPajClient } from './paj.ts';
 import { createTaskStore } from './tasks.ts';
+import { createLedgerMaintenance, CUTOVER_PHRASE, ERASE_PHRASE } from './ledger-maintenance.ts';
 import { renderTaskView } from './task-view.ts';
 import { listWorkspaces } from './workspaces.ts';
 import { launchMain } from './launch.ts';
@@ -46,6 +47,14 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
   const makeStore = options.createTaskStore ?? createTaskStore;
   const workspaces = options.listWorkspaces ?? listWorkspaces;
   const launch = options.launchMain ?? launchMain;
+  const maintenance = createLedgerMaintenance(paths.stateDir);
+  let activationLease: ReturnType<typeof lease> | undefined;
+  function lease() {
+    const release = maintenance.lease();
+    let owners = 1;
+    const drop = () => { if (--owners === 0) release(); };
+    return { retain() { owners++; return drop; }, drop };
+  }
   let enabled = false;
   let generation = 0;
   let store: ReturnType<typeof createTaskStore> | undefined;
@@ -155,11 +164,16 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
     const definition: ToolDefinition<P> = { name, label: name.replaceAll('_', ' '), description, parameters,
       annotations: { readOnlyHint: readOnly, destructiveHint: false, openWorldHint: !readOnly },
       async execute(id, params, signal, _onUpdate, ctx) {
-        if (!local) await active(ctx);
-        signal?.throwIfAborted();
-        if (!enabled) throw new Error('Captain was disabled');
-        const value = await execute(id, params, ctx, signal);
-        return local ? local.render(value) : result(value);
+        if (!enabled || !activationLease) throw new Error('Captain is disabled. Run /captain in a main Paj-enabled Pi session first');
+        const current = generation;
+        const release = activationLease.retain();
+        try {
+          if (!local) await active(ctx);
+          signal?.throwIfAborted();
+          if (!enabled || generation !== current) throw new Error('Captain was disabled');
+          const value = await execute(id, params, ctx, signal);
+          return local ? local.render(value) : result(value);
+        } finally { release(); }
       } };
     const exposeTool = (next: boolean) => pi.registerTool({ ...definition, exposure: next ? 'direct' : 'hidden' });
     definitions.push({ name, expose: exposeTool });
@@ -180,19 +194,22 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
   add('captain_delegate', 'Delegate one finite assignment to an exact main agent. Include outcome, context, constraints and completion condition. The responsible main must arrange its OWN regular subagent reviews, resolve findings, and report checks and caveats. Persists intent before sending; queued is NOT started. Never retry unknown delivery automatically.',
     Type.Object({ recipient: Type.String(), assignment: Type.String({ minLength: 1, maxLength: 16384 }) }),
     async (requestId, params, ctx, signal) => {
+      const current = generation;
+      const ownerPiSessionId = identity(ctx);
       const self = await active(ctx);
-      const target = await client.resolveMain(params.recipient, identity(ctx));
+      const target = await client.resolveMain(params.recipient, ownerPiSessionId);
       signal?.throwIfAborted();
-      if (!enabled) throw new Error('Captain was disabled');
-      const task = ledger(ctx).begin({ requestId, ownerPiSessionId: identity(ctx),
+      if (!enabled || generation !== current || identity(ctx) !== ownerPiSessionId) throw new Error('Captain was disabled');
+      const tasks = ledger(ctx);
+      const task = tasks.begin({ requestId, ownerPiSessionId,
         ownerPajSessionId: self.id, target, assignment: params.assignment });
       if (task.reused || task.status !== 'prepared') return task;
       try {
         const message = await client.send({ from: self.id, recipient: target.id,
           text: params.assignment, kind: 'request', taskId: task.id });
-        return ledger(ctx).markSent(task.id, message);
+        return tasks.markSent(task.id, message);
       } catch (error) {
-        return ledger(ctx).markUnknown(task.id, errorMessage(error));
+        return tasks.markUnknown(task.id, errorMessage(error));
       }
     });
 
@@ -203,11 +220,13 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
   add('captain_reply', 'Answer a tracked worker question using its exact message ID. Use only after obtaining the needed answer; uncertain replies must not be resent automatically.',
     Type.Object({ taskId: Type.String(), questionId: Type.String(), answer: Type.String({ minLength: 1, maxLength: 16384 }) }),
     async (_requestId, params, ctx, signal) => {
+      const current = generation;
+      const id = identity(ctx);
       const observed = await refresh(ctx, signal);
       if (observed.status === 'last_known') throw new Error(`Cannot safely reply: ${observed.reason}`);
       const self = observed.self;
       signal?.throwIfAborted();
-      if (!enabled) throw new Error('Captain was disabled');
+      if (!enabled || generation !== current || identity(ctx) !== id) throw new Error('Captain was disabled');
       const tasks = ledger(ctx);
       const task = tasks.get(params.taskId);
       if (!task) throw new Error('Unknown Captain assignment');
@@ -241,13 +260,20 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
       return { path: paths.configFile, ...config };
     });
 
-  const reset = async (_event: unknown, ctx: ExtensionContext) => {
-    const wasEnabled = enabled;
+  const disable = async (ctx: ExtensionContext) => {
+    const previous = activationLease;
+    activationLease = undefined;
     expose(false);
     store = undefined;
     sessionId = undefined;
-    status(ctx);
-    try { await setCaptainInspection(pi.events, identity(ctx), false); }
+    try {
+      status(ctx);
+      await setCaptainInspection(pi.events, identity(ctx), false);
+    } finally { previous?.drop(); }
+  };
+  const reset = async (_event: unknown, ctx: ExtensionContext) => {
+    const wasEnabled = enabled;
+    try { await disable(ctx); }
     catch (error) {
       if (wasEnabled) ctx.ui.notify(`Captain revocation failed: ${errorMessage(error)}`, 'error');
     }
@@ -293,18 +319,21 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
   });
 
   pi.on('before_agent_start', async (event, ctx) => {
-    if (!enabled) return;
+    if (!enabled || !activationLease) return;
+    const current = generation;
     let config;
     try { config = loadConfig(paths.configFile); } catch {
       return { systemPrompt: `${event.systemPrompt}\n\nCaptain configuration is invalid. Tell the user to fix `
         + `${JSON.stringify(paths.configFile)} before coordinating work. Do not launch or delegate around the failed checks.` };
     }
     let freshness = 'Paj refresh failed; report task state as last known, not current.';
+    const release = activationLease.retain();
     try {
       const observed = await refresh(ctx);
       freshness = observed.status === 'refreshed' ? 'Current Paj registration caught up as of the last page.'
         : `Paj refresh incomplete (${observed.reason}); report task state as last known.`;
-    } catch {}
+    } catch {} finally { release(); }
+    if (!enabled || generation !== current) return;
     let tasks: { id: string; status: string; target: string }[] = [];
     try { tasks = ledger(ctx).list().slice(-30).map(task => ({ id: task.id, status: task.status, target: task.target.id })); }
     catch { freshness = 'Captain ledger unavailable. Report this problem; never repeat uncertain assignments.'; }
@@ -328,14 +357,12 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
   });
 
   pi.registerCommand('captain', {
-    description: 'Enable Captain here; /captain off|status|settings|tasks',
+    description: 'Enable Captain here; /captain off|status|settings|tasks|erase-ledgers|establish-ledger-cutover',
     handler: async (args, ctx) => {
       try {
         const action = args.trim() || 'on';
         if (action === 'off') {
-          expose(false);
-          status(ctx);
-          await setCaptainInspection(pi.events, identity(ctx), false);
+          await disable(ctx);
           pi.appendEntry(MODE_ENTRY, { version: 1, enabled: false });
           ctx.ui.notify('Captain disabled. Launched main agents keep running.', 'info');
         } else if (action === 'on') {
@@ -350,26 +377,70 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
           loadConfig(paths.configFile);
           await client.self(id);
           if (activation !== generation || identity(ctx) !== id) return;
-          ledger(ctx);
+          const pendingLease = lease();
           try {
+            store = undefined;
+            sessionId = undefined;
+            ledger(ctx);
             await setCaptainInspection(pi.events, id, true);
             if (activation !== generation || identity(ctx) !== id) return;
             expose(true);
+            activationLease = pendingLease;
           } catch (error) {
             if (activation === generation && identity(ctx) === id) {
               expose(false);
               try { await setCaptainInspection(pi.events, id, false); } catch {}
             }
             throw error;
-          }
+          } finally { if (activationLease !== pendingLease) pendingLease.drop(); }
           pi.appendEntry(MODE_ENTRY, { version: 1, enabled: true });
           status(ctx);
           ctx.ui.notify('Captain enabled in this session. Use /captain settings to inspect launch permissions.', 'info');
+          void maintenance.large().then(large => {
+            if (large && enabled && generation === activation) ctx.ui.notify(
+              'Captain ledgers are large (over 3 GiB). To erase all saved task history, turn Captain off in all local Pi sessions, then run /captain erase-ledgers.', 'warning');
+          }).catch(() => undefined);
         } else if (action === 'status' || action === 'settings') {
           ctx.ui.notify(JSON.stringify({ enabled, path: paths.configFile, ...loadConfig(paths.configFile) }, null, 2), 'info');
         } else if (action === 'tasks') {
-          ctx.ui.notify((await taskView(ctx)).content[0].text, 'info');
-        } else ctx.ui.notify('Usage: /captain [on|off|status|settings|tasks]', 'warning');
+          if (!enabled || !activationLease) throw new Error('Captain is off');
+          const release = activationLease.retain();
+          try { ctx.ui.notify((await taskView(ctx)).content[0].text, 'info'); }
+          finally { release(); }
+        } else if (action === 'erase-ledgers' || action === 'establish-ledger-cutover') {
+          if (ctx.mode !== 'tui' || !ctx.hasUI || !ctx.isIdle()) {
+            throw new Error('Ledger maintenance requires an idle, interactive Pi terminal');
+          }
+          if (enabled) throw new Error(`Turn Captain off in this session (${identity(ctx)}) and all other local Pi sessions first`);
+          const id = identity(ctx);
+          const current = generation;
+          const check = () => {
+            if (enabled || generation !== current || identity(ctx) !== id || !ctx.isIdle()) {
+              throw new Error('Pi session changed during confirmation; start over');
+            }
+          };
+          if (action === 'establish-ledger-cutover') {
+            const answer = await ctx.ui.input(`Quit all older Pi/SDK runtimes using this installation and use only coordinated versions. Type ${CUTOVER_PHRASE} to attest:`);
+            if (answer !== CUTOVER_PHRASE) return;
+            check();
+            maintenance.establish();
+            ctx.ui.notify('Captain ledger cutover recorded. No task ledgers were erased.', 'info');
+            return;
+          }
+          const snapshot = maintenance.preview();
+          if (!snapshot.names.length && !snapshot.interrupted) {
+            ctx.ui.notify('No saved Captain task ledgers to erase.', 'info');
+            return;
+          }
+          const recovery = snapshot.interrupted ? 'A prior erasure was interrupted. ' : '';
+          const answer = await ctx.ui.input(`${recovery}Irreversibly erase ALL ${snapshot.names.length} saved Captain task ledgers for this installation? `
+            + `${snapshot.tasks} tracked tasks; ${snapshot.unresolved} known unfinished or unresolved. `
+            + `Already-sent work and workers continue; erased outcomes will not be tracked. Type ${ERASE_PHRASE} to proceed:`);
+          if (answer !== ERASE_PHRASE) return;
+          check();
+          const erased = maintenance.erase(snapshot.digest);
+          ctx.ui.notify(`Erased ${erased} Captain task ledgers. Already-sent work continues.`, 'info');
+        } else ctx.ui.notify('Usage: /captain [on|off|status|settings|tasks|erase-ledgers|establish-ledger-cutover]', 'warning');
       } catch (error) { ctx.ui.notify(`Captain: ${errorMessage(error)}`, 'error'); }
     },
   });

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { registerCaptain } from '../src/extension.ts';
 import { saveConfig, captainPaths, loadConfig } from '../src/config.ts';
+import { createLedgerMaintenance, CUTOVER_PHRASE, ERASE_PHRASE } from '../src/ledger-maintenance.ts';
 
 const Type = Object.fromEntries(['Object', 'String', 'Optional', 'Array', 'Boolean']
   .map(name => [name, value => ({ type: name, value })]));
@@ -66,6 +67,62 @@ function fixture(t, overrides = {}) {
     tool: (name, params = {}, id = 'tool-call') => tools.get(name).execute(id, params, undefined, undefined, ctx),
     event: (name, event = {}) => handlers.get(name)(event, ctx) };
 }
+
+test('erase is interactive, requires the exact phrase, and waits for an in-flight send after off', async t => {
+  let dispatch;
+  let settle;
+  const sent = new Promise(resolve => { dispatch = resolve; });
+  const pending = new Promise(resolve => { settle = resolve; });
+  const f = fixture(t, { client: { send: async args => {
+    dispatch();
+    await pending;
+    return { ...args, id: '30000000-0000-4000-8000-000000000001',
+      from: { id: self.id, name: self.name }, to: worker.id, createdAtMs: 1 };
+  } } });
+  let confirmation = CUTOVER_PHRASE;
+  const prompts = [];
+  f.ctx.hasUI = true;
+  f.ctx.isIdle = () => true;
+  f.ctx.ui.input = async title => { prompts.push(title); return confirmation; };
+  f.ctx.mode = 'rpc';
+  await f.command('erase-ledgers');
+  assert.match(f.notices.at(-1)[0], /interactive/);
+  assert.equal(prompts.length, 0);
+  f.ctx.mode = 'tui';
+  await f.command('establish-ledger-cutover');
+  await f.command('on');
+  const inFlight = f.tool('captain_delegate', { recipient: worker.id, assignment: 'Finish the review.' });
+  await sent;
+  await f.command('erase-ledgers');
+  assert.match(f.notices.at(-1)[0], new RegExp(ownPiId));
+  await f.command('off');
+  await f.command('erase-ledgers');
+  assert.match(f.notices.at(-1)[0], /finishing an operation/);
+  assert.equal(prompts.length, 1);
+  settle();
+  assert.equal((await inFlight).details.status, 'queued');
+  const maintenance = createLedgerMaintenance(f.paths.stateDir);
+  confirmation = `${ERASE_PHRASE} `;
+  await f.command('erase-ledgers');
+  assert.match(prompts.at(-1), /1 saved Captain task ledgers.*1 known unfinished or unresolved/);
+  assert.equal(maintenance.preview().tasks, 1);
+  confirmation = ERASE_PHRASE;
+  let turnOffOther;
+  f.ctx.ui.input = async () => {
+    turnOffOther = createLedgerMaintenance(f.paths.stateDir).lease();
+    return confirmation;
+  };
+  await f.command('erase-ledgers');
+  assert.match(f.notices.at(-1)[0], /Turn Captain off/);
+  turnOffOther();
+  assert.equal(maintenance.preview().tasks, 1);
+  f.ctx.ui.input = async () => confirmation;
+  await f.command('erase-ledgers');
+  assert.equal(maintenance.preview().names.length, 0);
+  await f.command('on');
+  assert.deepEqual((await f.tool('captain_tasks')).details, []);
+  await f.command('off');
+});
 
 test('Captain lifecycle does not discover or subscribe to Voice', async t => {
   const f = fixture(t);

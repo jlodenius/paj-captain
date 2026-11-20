@@ -108,6 +108,29 @@ sandbox. Queued work is not proof of execution; uncertain actions are not automa
 Captain reports through ordinary Pi responses. If you use a separate Voice extension, it handles
 speech according to its own settings. No Captain settings migration is needed.
 
+### Erasing saved task ledgers
+
+`/captain erase-ledgers` is an interactive maintenance command, not a model tool. It is only for
+one local installation (`$PI_CODING_AGENT_DIR`) on a filesystem with working local `flock`.
+Before the first use, quit every older Pi or SDK runtime using that directory, reopen only on a
+coordinated version, and record that cutover with `/captain establish-ledger-cutover`. Do not use
+an older version against the same directory afterward. The attestation is an operator prerequisite,
+not proof that an undetectable older process has exited. If mixed use occurs, quiesce again and
+repeat the cutover before attempting erase. Do not replace or remove coordination files while Pi is
+running.
+
+Turn Captain off in every local Pi session and wait for in-flight work to settle. The command
+previews saved ledger and known unfinished/unresolved task counts. It deletes all saved task ledgers
+only after you type `ERASE ALL CAPTAIN LEDGERS` exactly and the preview still matches. It does not
+stop workers, undo sends, or delete Paj messages, Pi conversations, preferences, or launch receipts.
+Already-sent outcomes will no longer be tracked. This is irreversible deletion, not secure erasure
+of backups or other copies. If interrupted, some files may already be gone: new activation stays
+blocked until you run the command again and confirm a fresh preview. There is no automatic resume.
+Keep this installation and its parent directories stable while using Captain; do not run scripts
+that write task files outside the coordinated extension. Unsafe files, uncertain writes and oversized
+scans refuse rather than guessing. Captain advises on enable when its best-effort metadata scan
+finds more than 3 GiB. A partial scan may miss the threshold; nothing is erased automatically.
+
 ## Reference
 
 - [Captain workflow](skills/paj-captain/SKILL.md)
