@@ -47,6 +47,7 @@ export function createLedgerMaintenance(dir: string) {
   const gate = '.captain-ledger-gate';
   const cutover = '.captain-ledger-cutover-v1';
   const interruption = '.captain-ledger-erase-incomplete';
+  const epoch = '.captain-ledger-epoch';
   const busy = 'Captain is enabled or finishing an operation in a local Pi session. Turn Captain off in all sessions and retry when idle.';
   function openDirectory(create: boolean) {
     securePath(join(dir, gate), create);
@@ -72,12 +73,24 @@ export function createLedgerMaintenance(dir: string) {
     try { verifyMarker(file); return true; }
     catch (error) { if (errorCode(error) === 'ENOENT') return false; throw error; }
   }
-  function publishMarker(dirFd: number, name: string) {
+  function readEpoch(base: string) {
+    const path = join(base, epoch);
+    let fd;
+    try { fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); }
+    catch (error) { if (errorCode(error) === 'ENOENT') return 'initial'; throw error; }
+    try {
+      if (safeFile(fd, path).size !== 36) throw new Error('Invalid Captain ledger epoch');
+      const value = fs.readFileSync(fd, 'utf8');
+      if (!/^[0-9a-f-]{36}$/.test(value)) throw new Error('Invalid Captain ledger epoch');
+      return value;
+    } finally { fs.closeSync(fd); }
+  }
+  function publishMarker(dirFd: number, name: string, content = marker) {
     const base = anchored(dirFd);
     const temporary = join(base, `.captain-marker-${randomUUID()}.tmp`);
     const fd = fs.openSync(temporary, 'wx', 0o600);
     try {
-      fs.writeFileSync(fd, marker);
+      fs.writeFileSync(fd, content);
       fs.fsyncSync(fd);
       fs.renameSync(temporary, join(base, name));
       fs.fsyncSync(dirFd);
@@ -165,14 +178,18 @@ export function createLedgerMaintenance(dir: string) {
     if (!markerExists(join(base, cutover))) throw new Error(missingCutover);
   }
   return {
-    lease() {
+    lease(expectedEpoch?: string) {
       const fd = openDirectory(true);
       try {
         const base = anchored(fd);
         const release = lock(join(base, gate), false, true, 'Captain ledger maintenance is running; retry when it finishes');
         try {
           if (markerExists(join(base, interruption))) throw new Error('Captain ledger erasure was interrupted; rerun /captain erase-ledgers while off to review and finish');
-          return release;
+          const value = readEpoch(base);
+          if (expectedEpoch !== undefined && expectedEpoch !== value) {
+            throw new Error('Captain ledgers were erased during navigation; run /captain explicitly to start again');
+          }
+          return Object.assign(release, { epoch: value });
         } catch (error) { release(); throw error; }
       } finally { fs.closeSync(fd); }
     },
@@ -210,6 +227,7 @@ export function createLedgerMaintenance(dir: string) {
         if (!interrupted) publishMarker(fd, interruption);
         let erased = 0;
         try {
+          publishMarker(fd, epoch, randomUUID());
           for (const [name, expected] of snapshot.files) {
             fs.unlinkSync(verifyFile(name, expected));
             erased++;

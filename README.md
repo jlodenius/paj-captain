@@ -123,8 +123,10 @@ running.
 
 Turn Captain off in every local Pi session and wait for in-flight work to settle. The command
 previews saved ledger and known unfinished/unresolved task counts. It deletes all saved task ledgers
-only after you type `ERASE ALL CAPTAIN LEDGERS` exactly and the preview still matches. It does not
-stop workers, undo sends, or delete Paj messages, Pi conversations, preferences, or launch receipts.
+only after you type `ERASE ALL CAPTAIN LEDGERS` exactly and the preview still matches. If erasure
+wins between two Pi runtimes during navigation, the old runtime cannot carry ON forward. It does
+not stop workers, undo sends, or delete Paj messages, Pi conversations, preferences, or launch
+receipts.
 Already-sent outcomes will no longer be tracked. This is irreversible deletion, not secure erasure
 of backups or other copies. If interrupted, some files may already be gone: new activation stays
 blocked until you run the command again and confirm a fresh preview. There is no automatic resume.

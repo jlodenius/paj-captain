@@ -127,6 +127,29 @@ test('erase is interactive, requires the exact phrase, and waits for an in-fligh
   await f.command('off');
 });
 
+test('a confirmed erase during runtime replacement cancels the old ON handoff', async t => {
+  const f = fixture(t);
+  const maintenance = createLedgerMaintenance(f.paths.stateDir);
+  maintenance.establish();
+  await f.command('on');
+  const task = (await f.tool('captain_delegate', { recipient: worker.id, assignment: 'Review.' })).details;
+  await f.tool('captain_tasks');
+  await f.event('session_shutdown', { reason: 'reload' });
+  const preview = maintenance.preview();
+  assert.equal(preview.tasks, 1);
+  assert.equal(maintenance.erase(preview.digest), 1);
+  f.rebind();
+  await f.event('session_start', { reason: 'reload' });
+  await f.event('resources_discover', { reason: 'reload' });
+  assert.match(f.notices.at(-1)[0], /ledgers were erased during navigation/);
+  assert.ok(!f.pi.getActiveTools().includes('captain_delegate'));
+  assert.equal(maintenance.preview().names.length, 0);
+  await f.command('on');
+  assert.deepEqual((await f.tool('captain_tasks')).details, []);
+  assert.equal(f.calls.filter(call => call[0] === 'send').length, 1, task.id);
+  await f.command('off');
+});
+
 test('Captain lifecycle does not discover or subscribe to Voice', async t => {
   const f = fixture(t);
   await f.event('session_start');

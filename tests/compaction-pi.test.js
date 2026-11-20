@@ -348,13 +348,13 @@ test('real Pi carries mode across fork and resume without copying old ledger con
   assert.notEqual((await f.request('get_state')).sessionId, original.sessionId);
   const enabled = async () => JSON.parse((await f.command('/captain status')).at(-1).message).enabled;
   assert.equal(await enabled(), true);
-  assert.deepEqual(JSON.parse((await f.command('/captain tasks')).at(-1).message), []);
+  assert.deepEqual(JSON.parse((await f.command('/captain tasks')).at(-1).message).tasks, []);
   assert.equal((await f.request('switch_session', { sessionPath: original.sessionFile })).cancelled, false);
   assert.equal((await f.request('get_state')).sessionId, original.sessionId);
   assert.equal(await enabled(), true);
-  const previous = JSON.parse((await f.command('/captain tasks')).at(-1).message);
+  const previous = JSON.parse((await f.command('/captain tasks')).at(-1).message).tasks;
   assert.equal(previous.length, 1);
-  assert.equal(previous[0].id, ledger[0][1][0].id);
+  assert.equal(previous[0].taskId, ledger[0][1][0].id);
   assert.equal((await f.request('clone')).cancelled, false);
   assert.notEqual((await f.request('get_state')).sessionId, original.sessionId);
   assert.equal(await enabled(), true);

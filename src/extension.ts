@@ -20,7 +20,7 @@ const MODE_ENTRY = 'paj-captain-mode';
 const MAX_REFRESH_PAGES = 4;
 const CONTINUITY = Symbol.for('paj-captain.continuity.v1');
 type SessionManager = ExtensionContext['sessionManager'];
-type ModeSnapshot = { revision: number; enabled: boolean; childTools: string[] };
+type ModeSnapshot = { revision: number; enabled: boolean; childTools: string[]; ledgerEpoch?: string };
 type Handoff = ModeSnapshot & ({ reason: 'reload'; manager: WeakRef<SessionManager>; id: string }
   | { reason: 'new' | 'resume' | 'fork'; sourceFile?: string; targetFile?: string });
 const processState: typeof process & { [CONTINUITY]?: { revision: number; handoff?: Handoff } } = process;
@@ -58,11 +58,11 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
   const launch = options.launchMain ?? launchMain;
   const maintenance = createLedgerMaintenance(paths.stateDir);
   let activationLease: ReturnType<typeof lease> | undefined;
-  function lease() {
-    const release = maintenance.lease();
+  function lease(expectedEpoch?: string) {
+    const release = maintenance.lease(expectedEpoch);
     let owners = 1;
     const drop = () => { if (--owners === 0) release(); };
-    return { retain() { owners++; return drop; }, drop };
+    return { epoch: release.epoch, retain() { owners++; return drop; }, drop };
   }
   let enabled = false;
   let generation = 0;
@@ -276,7 +276,9 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
       return { path: paths.configFile, ...config };
     });
 
-  const activate = async (ctx: ExtensionContext, revision: number, waitForIdle?: () => Promise<void>) => {
+  const activate = async (ctx: ExtensionContext, revision: number, options: {
+    waitForIdle?: () => Promise<void>; ledgerEpoch?: string;
+  } = {}) => {
     if (closing || revision !== continuity.revision) return false;
     expose(false);
     const activation = generation;
@@ -285,12 +287,12 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
       && identity(ctx) === id;
     await setCaptainInspection(pi.events, id, false);
     if (!isCurrent()) return false;
-    if (waitForIdle) await waitForIdle();
+    if (options.waitForIdle) await options.waitForIdle();
     if (!isCurrent()) return false;
     loadConfig(paths.configFile);
     await client.self(id);
     if (!isCurrent()) return false;
-    const pendingLease = lease();
+    const pendingLease = lease(options.ledgerEpoch);
     try {
       store = undefined;
       sessionId = undefined;
@@ -338,7 +340,7 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
     closing = true;
     delete continuity.handoff;
     const state = { revision: continuity.revision, enabled,
-      childTools: enabled ? restoredTools : activeChildTools() };
+      childTools: enabled ? restoredTools : activeChildTools(), ledgerEpoch: activationLease?.epoch };
     const reason = event.reason;
     if (reason === 'reload') {
       continuity.handoff = { ...state, reason, manager: new WeakRef(ctx.sessionManager), id: identity(ctx) };
@@ -354,7 +356,7 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
     const rebinding = !closing && enabled && sessionId === identity(ctx);
     closing = false;
     if (rebinding) {
-      const state = { revision: continuity.revision, enabled: true, childTools: restoredTools };
+      const state = { revision: continuity.revision, enabled: true, childTools: restoredTools, ledgerEpoch: activationLease?.epoch };
       const disabling = disable(ctx);
       pendingMode = state;
       try { await disabling; } catch {}
@@ -385,7 +387,7 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
     const continuing = mode && !closing && mode.revision === continuity.revision;
     if (continuing) syncTools(mode.childTools);
     try {
-      if (continuing && mode.enabled) await activate(ctx, mode.revision);
+      if (continuing && mode.enabled) await activate(ctx, mode.revision, { ledgerEpoch: mode.ledgerEpoch });
       else if (!enabled && !closing) await setCaptainInspection(pi.events, identity(ctx), false);
     } catch (error) {
       if (continuing && mode.enabled) ctx.ui.notify(`Captain stayed off: ${errorMessage(error)}`, 'error');
@@ -477,7 +479,7 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
           pi.appendEntry(MODE_ENTRY, { version: 1, enabled: false });
           ctx.ui.notify('Captain disabled. Launched main agents keep running.', 'info');
         } else if (action === 'on') {
-          if (enabled || !await activate(ctx, continuity.revision, () => ctx.waitForIdle())) return;
+          if (enabled || !await activate(ctx, continuity.revision, { waitForIdle: () => ctx.waitForIdle() })) return;
           pi.appendEntry(MODE_ENTRY, { version: 1, enabled: true });
           ctx.ui.notify('Captain enabled in this session. Use /captain settings to inspect launch permissions.', 'info');
         } else if (action === 'status' || action === 'settings') {
