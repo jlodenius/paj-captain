@@ -420,6 +420,86 @@ test('delegation persists a queued task, accepts a worker outside launch roots a
   assert.equal(tasks[0].id, first.id);
 });
 
+test('task views show capacity, questions, uncertainty, reported results and last-known freshness', async t => {
+  let unavailable = false;
+  let historyFailed = false;
+  let recordFailed = false;
+  let registration = self;
+  const messages = [];
+  const f = fixture(t, { client: {
+    self: async () => { if (unavailable) throw new Error('Paj unavailable'); return registration; },
+    incoming: async () => {
+      if (historyFailed) throw new Error('History too large');
+      return recordFailed ? new Array(40001).fill(null) : messages;
+    },
+    send: async () => { throw new Error('Dispatch timed out'); },
+  } });
+  await f.command('on');
+  const task = (await f.tool('captain_delegate', { recipient: worker.id, assignment: 'Review the draft.' })).details;
+  const envelope = { from: { id: worker.id, name: worker.name }, to: self.id, taskId: task.id };
+  const questionId = '30000000-0000-4000-8000-000000000002';
+  messages.push({ ...envelope, id: questionId, kind: 'question', text: 'Which draft?', createdAtMs: 1 });
+  await f.tool('captain_reply', { taskId: task.id, questionId, answer: 'The current one.' });
+  messages.push({ ...envelope, id: '30000000-0000-4000-8000-000000000003',
+    kind: 'result', text: 'Review reported with caveats.', createdAtMs: 2 });
+  const response = await f.tool('captain_tasks');
+  const fresh = JSON.parse(response.content[0].text);
+  assert.equal(response.details[0].id, task.id);
+  assert.equal(fresh.freshness.status, 'refreshed');
+  assert.equal(fresh.capacity.remainingTasks, 127);
+  assert.equal(fresh.capacity.remainingBytes + fresh.capacity.usedBytes, 16 * 1024 * 1024);
+  assert.equal(fresh.tasks[0].status, 'result_reported');
+  assert.equal(fresh.tasks[0].requestEnqueue, 'unknown');
+  assert.equal(fresh.tasks[0].unansweredQuestions, 1);
+  assert.equal(fresh.tasks[0].nextQuestion, null);
+  assert.equal(fresh.tasks[0].freshness, 'refreshed');
+  assert.equal(fresh.tasks[0].nextUncertainReply.questionId, questionId);
+  assert.equal(fresh.tasks[0].reportedOutcome, 'Review reported with caveats.');
+  registration = { ...self, id: '10000000-0000-4000-8000-000000000004' };
+  const older = JSON.parse((await f.tool('captain_tasks')).content[0].text);
+  assert.equal(older.freshness.pajRegistration, registration.id);
+  assert.equal(older.tasks[0].freshness, 'last_known');
+  historyFailed = true;
+  await f.command('tasks');
+  const saved = JSON.parse(f.notices.at(-1)[0]);
+  assert.equal(saved.freshness.status, 'last_known');
+  assert.equal(saved.freshness.reason, 'paj_read_failed');
+  assert.deepEqual(saved.tasks, older.tasks);
+  historyFailed = false;
+  recordFailed = true;
+  const unrecorded = JSON.parse((await f.tool('captain_tasks')).content[0].text);
+  assert.equal(unrecorded.freshness.reason, 'ledger_recording_failed');
+  recordFailed = false;
+  assert.equal(JSON.parse((await f.tool('captain_tasks')).content[0].text).freshness.status, 'refreshed');
+  unavailable = true;
+  const detail = await f.tool('captain_tasks', { taskId: task.id });
+  assert.equal(detail.details.id, task.id);
+  const detailView = JSON.parse(detail.content[0].text);
+  assert.equal(detailView.freshness.status, 'last_known');
+  assert.equal(detailView.detail.id, task.id);
+  await assert.rejects(f.tool('captain_reply', { taskId: task.id, questionId, answer: 'Retry.' }), /Paj unavailable/);
+  await f.command('off');
+  await assert.rejects(f.tool('captain_tasks'), /disabled/);
+});
+
+test('a large exact task view stays bounded and preserves private full details', async t => {
+  const f = fixture(t, { client: { resolveMain: async () => ({ ...worker, name: '🧪'.repeat(20000) }) } });
+  await f.command('on');
+  const task = (await f.tool('captain_delegate', { recipient: worker.id, assignment: 'Review.' })).details;
+  const fullTask = JSON.parse(readFileSync(task.fullOutputPath, 'utf8'));
+  t.after(() => rmSync(dirname(task.fullOutputPath), { recursive: true, force: true }));
+  const response = await f.tool('captain_tasks', { taskId: fullTask.id });
+  const text = response.content[0].text;
+  assert.ok(Buffer.byteLength(text) <= 32768);
+  const view = JSON.parse(text);
+  assert.equal(view.shownTasks, 1);
+  assert.equal(view.tasks[0].taskId, fullTask.id);
+  assert.ok(view.fullOutputPath);
+  t.after(() => rmSync(dirname(view.fullOutputPath), { recursive: true, force: true }));
+  assert.equal(statSync(view.fullOutputPath).mode & 0o777, 0o600);
+  assert.equal(JSON.parse(readFileSync(view.fullOutputPath, 'utf8')).target.name, fullTask.target.name);
+});
+
 test('unknown delivery remains visible and is never automatically resent', async t => {
   const f = fixture(t, { client: { send: async args => { f.calls.push(['send', args]); throw new Error('Timeout after dispatch'); } } });
   await f.command('');

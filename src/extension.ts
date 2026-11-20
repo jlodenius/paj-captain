@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { captainPaths, loadConfig, saveConfig } from './config.ts';
 import { createPajClient } from './paj.ts';
 import { createTaskStore } from './tasks.ts';
+import { renderTaskView } from './task-view.ts';
 import { listWorkspaces } from './workspaces.ts';
 import { launchMain } from './launch.ts';
 import { setCaptainInspection } from './inspection.ts';
@@ -74,6 +75,42 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
     ledger(ctx).observe(await client.incoming(self.id));
     return self;
   };
+  const taskView = async (ctx: ExtensionContext, taskId?: string, signal?: AbortSignal) => {
+    const id = identity(ctx);
+    const start = generation;
+    const check = () => {
+      signal?.throwIfAborted();
+      if (!enabled || generation !== start || identity(ctx) !== id) throw new Error('Captain session changed or is off');
+    };
+    check();
+    loadConfig(paths.configFile);
+    const attemptedAt = new Date().toISOString();
+    const store = ledger(ctx);
+    let refreshedRegistration: string | undefined;
+    let failure: 'paj_read_failed' | 'ledger_recording_failed' = 'paj_read_failed';
+    try {
+      const self = await client.self(id);
+      const messages = await client.incoming(self.id);
+      check();
+      failure = 'ledger_recording_failed';
+      store.observe(messages);
+      refreshedRegistration = self.id;
+    } catch { check(); }
+    const freshness = refreshedRegistration
+      ? { status: 'refreshed', attemptedAt, pajRegistration: refreshedRegistration }
+      : { status: 'last_known', attemptedAt, reason: failure };
+    const { tasks, capacity } = store.snapshot();
+    const task = taskId ? tasks.find(value => value.id === taskId) : undefined;
+    if (taskId && !task) throw new Error(freshness.status === 'last_known'
+      ? 'Unknown Captain assignment in the saved ledger; refresh failed' : 'Unknown Captain assignment');
+    const header = {
+      freshness,
+      capacity,
+      guidance: 'Both remaining task slots and bytes matter. A new Pi session has a separate ledger for genuinely new work; never repeat uncertain work.',
+      evidence: 'An enqueue receipt is not execution. A result is a worker report, not verified success. Refresh reads pending and history for the current Paj registration only; it does not prove completeness, conversation delivery or live activity.',
+    };
+    return renderTaskView(header, task ? [task] : tasks, refreshedRegistration, task);
+  };
   const expose = (next: boolean) => {
     if (!next) generation++;
     if (enabled !== next) {
@@ -87,16 +124,17 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
     }
   };
   const status = (ctx: ExtensionContext) => ctx.ui.setStatus('paj-captain', enabled ? 'Captain' : undefined);
-  const add = <P extends TSchema>(name: string, description: string, parameters: P,
-    execute: (id: string, params: Static<P>, ctx: ExtensionContext, signal: AbortSignal | undefined) => unknown,
-    readOnly = false) => {
+  const add = <P extends TSchema, R>(name: string, description: string, parameters: P,
+    execute: (id: string, params: Static<P>, ctx: ExtensionContext, signal: AbortSignal | undefined) => R,
+    readOnly = false, local?: { render: (value: Awaited<R>) => ReturnType<typeof result> }) => {
     const definition: ToolDefinition<P> = { name, label: name.replaceAll('_', ' '), description, parameters,
       annotations: { readOnlyHint: readOnly, destructiveHint: false, openWorldHint: !readOnly },
       async execute(id, params, signal, _onUpdate, ctx) {
-        await active(ctx);
+        if (!local) await active(ctx);
         signal?.throwIfAborted();
         if (!enabled) throw new Error('Captain was disabled');
-        return result(await execute(id, params, ctx, signal));
+        const value = await execute(id, params, ctx, signal);
+        return local ? local.render(value) : result(value);
       } };
     const exposeTool = (next: boolean) => pi.registerTool({ ...definition, exposure: next ? 'direct' : 'hidden' });
     definitions.push({ name, expose: exposeTool });
@@ -133,15 +171,9 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
       }
     });
 
-  add('captain_tasks', 'Read this Captain session\'s durable assignments and observed questions/results. Refreshes from Paj without acknowledging or stealing its inbox. Idle/busy is not task completion.',
-    Type.Object({ taskId: Type.Optional(Type.String()) }),
-    async (_id, params, ctx) => {
-      await refresh(ctx);
-      if (!params.taskId) return ledger(ctx).list();
-      const task = ledger(ctx).get(params.taskId);
-      if (!task) throw new Error('Unknown Captain assignment');
-      return task;
-    }, true);
+  add('captain_tasks', 'Summarize this Captain session’s durable assignments, freshness, and capacity. Use taskId for full details. A failed Paj refresh shows last-known state and does not acknowledge messages.',
+    Type.Object({ taskId: Type.Optional(Type.String()) }), (_id, params, ctx, signal) => taskView(ctx, params.taskId, signal),
+    true, { render: view => view });
 
   add('captain_reply', 'Answer a tracked worker question using its exact message ID. Use only after obtaining the needed answer; uncertain replies must not be resent automatically.',
     Type.Object({ taskId: Type.String(), questionId: Type.String(), answer: Type.String({ minLength: 1, maxLength: 16384 }) }),
@@ -308,8 +340,7 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
         } else if (action === 'status' || action === 'settings') {
           ctx.ui.notify(JSON.stringify({ enabled, path: paths.configFile, ...loadConfig(paths.configFile) }, null, 2), 'info');
         } else if (action === 'tasks') {
-          await refresh(ctx);
-          ctx.ui.notify(JSON.stringify(ledger(ctx).list(), null, 2), 'info');
+          ctx.ui.notify((await taskView(ctx)).content[0].text, 'info');
         } else ctx.ui.notify('Usage: /captain [on|off|status|settings|tasks]', 'warning');
       } catch (error) { ctx.ui.notify(`Captain: ${errorMessage(error)}`, 'error'); }
     },

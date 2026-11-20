@@ -83,7 +83,11 @@ owning main. Captain requires Paj's `paj:captain-inspection:v1` handshake:
 `{ enabled, piSessionId, reply }`. Paj replies synchronously with a registry-update promise; Captain
 awaits it before activation or completing revocation. Missing or rejected permission fails closed.
 
-Use `/captain status`, `/captain settings`, and `/captain tasks` to inspect state.
+Use `/captain status`, `/captain settings`, and `/captain tasks` to inspect state. The task view
+shows unanswered questions, uncertain sends and replies, reported outcomes, and remaining slots
+and bytes in this Pi session’s ledger. If Paj refresh fails, the view labels saved data as last
+known. Use `captain_tasks` with an exact task ID for full retained details. An enqueue or a worker
+report does not verify execution or success.
 `/captain off` restores ordinary mode without stopping workers. Captain always starts OFF after
 startup, resume, fork, switch, reload, or history navigation; historic mode entries never reactivate
 it. Explicit `/captain` activation is required. There is no model-callable mode tool.

@@ -197,6 +197,15 @@ export function createTaskStore(file: string, { now = Date.now, id = randomUUID 
   });
   initialized = true;
   return {
+    snapshot() {
+      securePath(file);
+      const state = load();
+      const usedBytes = Buffer.byteLength(JSON.stringify(state));
+      return { tasks: state.tasks, capacity: {
+        usedTasks: state.tasks.length, maxTasks: MAX_TASKS, remainingTasks: MAX_TASKS - state.tasks.length,
+        usedBytes, maxBytes: MAX_BYTES, remainingBytes: Math.max(0, MAX_BYTES - usedBytes),
+      } };
+    },
     list() { securePath(file); return clone(load().tasks); },
     get(taskId: string) { securePath(file); return clone(load().tasks.find(value => value.id === taskId)); },
     begin({ requestId, ownerPiSessionId, ownerPajSessionId, target, assignment }: {
