@@ -31,6 +31,7 @@ function fixture(t, failAnswers = false) {
   const ctx = { cwd: root, ui: { setStatus() {}, notify() {} }, waitForIdle: async () => {},
     sessionManager: { getSessionId: () => owner.piSessionId, getBranch: () => [] } };
   const client = { self: async () => owner, resolveMain: async () => worker,
+    getMessage: async (_registration, id) => incoming.find(message => message.id === id),
     readPage: async (_id, after) => ({ status: 'ok', nextCursor: String(incoming.length), hasMore: false,
       messages: incoming.slice(Number(after ?? 0)) }), listMain: async () => [worker], send: async args => {
       sent.push(args);
@@ -41,7 +42,7 @@ function fixture(t, failAnswers = false) {
   registerCaptain(pi, Type, { paths: captainPaths({ PI_CODING_AGENT_DIR: root }), client });
   const tool = async (name, params, id = randomUUID()) =>
     (await tools.get(name).execute(id, params, undefined, undefined, ctx)).details;
-  return { owner, worker, incoming, sent, tools, handlers, ctx, tool,
+  return { owner, worker, incoming, sent, tools, handlers, ctx, tool, client,
     enable: () => commands.get('captain').handler('', ctx),
     message: (task, kind, text) => ({ id: randomUUID(), from: { id: worker.id, name: worker.name },
       to: owner.id, createdAtMs: Date.now(), taskId: task.id, kind, text }) };
@@ -77,6 +78,26 @@ test('questions, duplicate answers and terminal results stay correlated through 
   assert.equal((await f.tool('captain_tasks', { taskId: task.id })).status, 'completed');
   await assert.rejects(f.tool('captain_reply', answer), /completed/);
   assert.equal(f.sent.length, 2);
+});
+
+test('generic answers require the expected sender and a stable Paj registration', async t => {
+  const f = fixture(t);
+  await f.enable();
+  const question = f.message({ id: 'other-task' }, 'question', 'Unrelated question');
+  const answer = () => f.handlers.get('tool_call')({ toolName: 'send_agent_message',
+    input: { recipient: f.worker.name, kind: 'answer', inReplyTo: question.id } }, f.ctx);
+  assert.equal((await answer()).block, true, 'missing original');
+  f.incoming.push({ ...question, from: { id: randomUUID(), name: 'Other worker' } });
+  assert.equal((await answer()).block, true, 'wrong sender');
+  f.incoming[0] = question;
+  assert.equal(await answer(), undefined, 'verified untracked task');
+  f.client.getMessage = async () => {
+    f.client.self = async () => ({ ...f.owner, id: randomUUID() });
+    return question;
+  };
+  assert.equal((await answer()).block, true, 'registration changed during lookup');
+  f.client.getMessage = async () => { throw new Error('unsupported'); };
+  assert.equal((await answer()).block, true, 'lookup unavailable');
 });
 
 test('a delivered conversation envelope cannot overtake an indexed page', async t => {

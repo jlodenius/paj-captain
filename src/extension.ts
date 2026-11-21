@@ -402,12 +402,29 @@ export function registerCaptain(pi: ExtensionAPI, Type: typeof SchemaType, optio
       if (!event.input.kind || event.input.kind === 'request') {
         return { block: true, reason: 'Use captain_delegate for tracked main-agent assignments' };
       }
-      if (event.input.kind === 'answer' && ledger(ctx).list().some(task =>
-        task.questions.some(question => question.id === event.input.inReplyTo))) {
-        return { block: true, reason: 'Use captain_reply for tracked worker questions' };
+      const start = generation;
+      let id, target;
+      try {
+        id = identity(ctx);
+        target = await client.resolveMain(typeof event.input.recipient === 'string' ? event.input.recipient : '', id);
       }
-      try { await client.resolveMain(typeof event.input.recipient === 'string' ? event.input.recipient : '', identity(ctx)); }
       catch (error) { return { block: true, reason: errorMessage(error) }; }
+      if (event.input.kind === 'answer') {
+        const cannotVerify = { block: true, reason: 'Cannot verify the original Paj message for this answer' };
+        const questionId = event.input.inReplyTo;
+        if (typeof questionId !== 'string') return cannotVerify;
+        try {
+          const self = await client.self(id);
+          const original = await client.getMessage(self.id, questionId);
+          if (!original || original.from.id !== target.id) return cannotVerify;
+          const current = await client.self(id);
+          if (current.id !== self.id || !enabled || generation !== start || identity(ctx) !== id) return cannotVerify;
+          // Indexed refresh may never have retained this question; Paj's original envelope supplies the task ID.
+          if (original.taskId !== undefined && ledger(ctx).get(original.taskId)) {
+            return { block: true, reason: 'Use captain_reply for tracked worker questions' };
+          }
+        } catch { return cannotVerify; }
+      }
     }
   });
 

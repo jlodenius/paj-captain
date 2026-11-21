@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createPajClient } from '../src/paj.ts';
 import { createTaskStore } from '../src/tasks.ts';
+import { registerCaptain } from '../src/extension.ts';
+import { captainPaths } from '../src/config.ts';
 
 const execute = promisify(execFile);
 const paging = process.env.PAJ_CAPTAIN_PAGED_INTEGRATION === '1';
@@ -52,6 +54,37 @@ test('real isolated Paj roundtrip preserves main-only delegation, questions, rep
   const question = await command(['message', 'send', owner.id, '--from', worker.id, '--kind', 'question',
     '--task-id', task.id, '--in-reply-to', request.id, '--supersedes', obsolete.id,
     '--text', 'Include both staged and unstaged changes?']);
+  const handlers = new Map();
+  const commands = new Map();
+  const Type = Object.fromEntries(['Object', 'String', 'Optional', 'Array', 'Boolean'].map(name => [name, () => ({})]));
+  const pi = {
+    events: { emit: (_name, request) => request.reply(Promise.resolve()) },
+    on: (name, handler) => handlers.set(name, handler), registerTool() {}, appendEntry() {},
+    registerCommand: (name, command) => commands.set(name, command), getActiveTools: () => [], setActiveTools() {},
+  };
+  const ctx = { cwd: captainCwd, ui: { setStatus() {}, notify() {} }, waitForIdle: async () => {},
+    sessionManager: { getSessionId: () => ownPiId } };
+  registerCaptain(pi, Type, { client, paths: captainPaths({ PI_CODING_AGENT_DIR: root }),
+    createTaskStore: () => ledger });
+  await commands.get('captain').handler('', ctx);
+  t.after(() => commands.get('captain').handler('off', ctx));
+  const genericAnswer = inReplyTo => handlers.get('tool_call')({
+    toolName: 'send_agent_message', input: { recipient: worker.name, kind: 'answer', inReplyTo },
+  }, ctx);
+
+  // Neither answer decision can rely on a saved question or a completed page refresh.
+  for (const original of [obsolete, question]) {
+    assert.match((await genericAnswer(original.id)).reason, /Use captain_reply/);
+  }
+  const untracked = await command(['message', 'send', owner.id, '--from', worker.id, '--kind', 'question',
+    '--text', 'Can I ask an unrelated question?']);
+  assert.equal(await genericAnswer(untracked.id), undefined);
+  const genericReply = await command(['message', 'send', worker.name, '--from', owner.id, '--kind', 'answer',
+    '--in-reply-to', untracked.id, '--text', 'Yes, go ahead.']);
+  assert.equal(genericReply.inReplyTo, untracked.id);
+  assert.equal(genericReply.taskId, undefined);
+  await command(['message', 'ack', owner.id, untracked.id]);
+
   const observe = async () => {
     const expected = ledger.checkpoint(owner.id);
     const page = await client.readPage(owner.id, expected?.cursor);

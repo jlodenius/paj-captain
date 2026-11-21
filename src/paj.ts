@@ -8,7 +8,7 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const kinds = new Set(['request', 'question', 'answer', 'update', 'result']);
 const gapReasons = new Set(['unindexed', 'reset', 'changed', 'missing', 'oversized', 'invalid']);
 export const PAGE_LIMIT = 128;
-const PAGE_BYTES = 1024 * 1024;
+const MESSAGE_READ_BYTES = 1024 * 1024;
 export function validCursor(value: unknown): value is string {
   return typeof value === 'string' && value.length <= 96 && /^[\x21-\x7e]+$/.test(value);
 }
@@ -95,10 +95,21 @@ export function createPajClient({ run = exec, cwd, env = process.env }: {
       }
       return message;
     },
+    async getMessage(recipientId: string, messageId: string): Promise<PajMessage | undefined> {
+      if (!isId(recipientId) || !isId(messageId)) throw new Error('Invalid Paj message lookup');
+      const result = await call(['message', 'get', recipientId, messageId], MESSAGE_READ_BYTES, 5000);
+      if (isRecord(result) && result.status === 'not-found') return undefined;
+      if (!isRecord(result) || result.status !== 'ok' || !validMessage(result.message)
+          || result.message.id !== messageId.toLowerCase() || result.message.to !== recipientId.toLowerCase()
+          || (result.message.taskId !== undefined && !nonempty(result.message.taskId))) {
+        throw new Error('Invalid or uncorrelated Paj message lookup response');
+      }
+      return result.message;
+    },
     async readPage(pajSessionId: string, after?: string): Promise<PajPage> {
       if (!isId(pajSessionId) || (after !== undefined && !validCursor(after))) throw new Error('Invalid Paj read position');
       const page = await call(['message', 'read', pajSessionId, '--limit', String(PAGE_LIMIT),
-        ...(after === undefined ? [] : ['--after', after])], PAGE_BYTES, 5000);
+        ...(after === undefined ? [] : ['--after', after])], MESSAGE_READ_BYTES, 5000);
       if (isRecord(page) && page.status === 'gap' && typeof page.reason === 'string' && gapReasons.has(page.reason)) {
         return { status: 'gap', reason: page.reason };
       }

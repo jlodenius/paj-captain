@@ -9,10 +9,10 @@ Requires Linux, Pi 1.5.2 or newer, Paj, Node.js 24 or newer, tmux, and `flock`
 (the file-locking command from util-linux).
 
 Before enabling Captain, install [Paj](https://github.com/jlodenius/paj#install) with Captain
-inspection support and a CLI that provides `paj message read`. All Paj participants sharing the
-runtime must use the same compatible version. If upgrading an existing runtime to paged reads,
-point every participant’s `PAJ_RUNTIME_DIR` at the same new, empty private directory. See
-[Paj’s paged-read documentation](https://github.com/jlodenius/paj#read-received-messages-in-pages).
+inspection support and a CLI that provides `paj message read` and `paj message get`. All Paj
+participants sharing the runtime must use the same compatible version. If upgrading an existing
+runtime to paged reads, point every participant’s `PAJ_RUNTIME_DIR` at the same new, empty private
+directory. See [Paj’s paged-read documentation](https://github.com/jlodenius/paj#read-received-messages-in-pages).
 
 Then install the Pi package:
 

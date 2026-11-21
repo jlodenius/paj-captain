@@ -61,6 +61,22 @@ test('send passes exact sender/recipient and validates echoed correlation', asyn
     taskId: 'assignment', inReplyTo: a }));
 });
 
+test('exact message lookup validates IDs, size, and the returned envelope', async () => {
+  const calls = [];
+  const original = message({ kind: 'question' });
+  const client = createPajClient({ run: runner({ status: 'ok', message: original }, calls) });
+  assert.deepEqual(await client.getMessage(a, c), original);
+  assert.deepEqual(calls[0].args, ['--json', 'message', 'get', a, c]);
+  assert.equal(calls[0].options.maxBuffer, 1024 ** 2);
+  await assert.rejects(client.getMessage(a, 'not-an-id'), /Invalid Paj message lookup/);
+  assert.equal(calls.length, 1);
+  for (const bad of [message({ id: b }), message({ to: b }), message({ taskId: null })]) {
+    await assert.rejects(createPajClient({ run: runner({ status: 'ok', message: bad }) }).getMessage(a, c),
+      /uncorrelated/);
+  }
+  assert.equal(await createPajClient({ run: runner({ status: 'not-found' }) }).getMessage(a, c), undefined);
+});
+
 test('paged reads validate recipient, progression, output limit and CLI failures', async () => {
   const valid = { status: 'ok', messages: [message()], nextCursor: 'next', hasMore: true };
   const calls = [];
