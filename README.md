@@ -7,9 +7,8 @@ in [Pi](https://github.com/earendil-works/pi). Each main manages its own subagen
 
 Requires Linux, Pi 1.5.2+, Node.js 24+, tmux, and `flock` (util-linux).
 [Install Paj](https://github.com/jlodenius/paj#install) with Captain inspection support and
-the `paj message read` and `paj message get` commands. If upgrading from before paged reads,
-follow [Paj's runtime cutover](https://github.com/jlodenius/paj#read-received-messages-in-pages).
-Use compatible versions for everyone sharing the runtime.
+the `paj message read` and `paj message get` commands. Use compatible versions for everyone
+sharing the runtime.
 
 ```sh
 pi install git:github.com/jlodenius/paj-captain
@@ -50,7 +49,7 @@ Use GPT/Codex; Claude bridge does not provide full Captain behavior.
 
 ## Usage
 
-In a main Paj-enabled Pi session, run `/reload` (restart Pi if upgraded), then `/captain`.
+In a main Paj-enabled Pi session, run `/reload`, then `/captain`.
 Check `/captain status`.
 Ask Captain to have an existing main agent run a project's tests, then look for the assignment
 in `/captain tasks`. Queued work is not proof of execution; *last known* means the task view

@@ -15,8 +15,7 @@ registered tools and skills alone do not provide full Captain behavior.
 Adjust the workspace paths to your projects. Without an allowlist, Captain can message existing
 agents but cannot launch new ones. Ask Captain to change preferences, or edit its section directly.
 Captain reads only its own section and preserves sibling settings when saving. For a declarative
-symlink, edit the source instead. The old `captain.json` file is not read; move its contents under
-`captain` in the shared file when upgrading.
+symlink, edit the source instead.
 
 ## Inspection and task tracking
 
@@ -33,10 +32,8 @@ report does not verify execution or success.
 
 Captain reads bounded pages without acknowledging messages and saves progress with the
 observations, so another refresh can continue a backlog. An incomplete read or history gap
-leaves saved data last known and blocks tracked replies until refresh is verified. Older
-registrations and their messages are not migrated or deleted; check them separately using Paj’s
-existing history tools. A new registration is not a continuation of the old inbox, and old
-assignments are not resent.
+leaves saved data last known and blocks tracked replies until refresh is verified. Each Paj
+registration has its own inbox. Captain does not resend assignments on re-registration.
 
 ## Mode lifecycle
 
@@ -53,11 +50,8 @@ sandbox. Queued work is not proof of execution; uncertain actions are not automa
 
 `/captain erase-ledgers` is an interactive maintenance command, not a model tool. It is only for
 one local installation (`$PI_CODING_AGENT_DIR`) on a filesystem with working local `flock`.
-Use only Captain versions that participate in ledger coordination in that directory. Older,
-uncoordinated Pi or SDK runtimes sharing it are unsupported: they do not take the shared gate
-lock, so that lock cannot detect or block them. If any such runtime uses this directory, quit it
-and stop using it with this installation before attempting erasure. Do not replace or remove
-coordination files while Pi is running.
+All Captain processes sharing that directory must participate in ledger coordination. Keep
+coordination files in place while Pi is running.
 
 Turn Captain off in every local Pi session and wait for in-flight work to settle. The command
 previews saved ledger and known unfinished/unresolved task counts. It deletes all saved task ledgers
