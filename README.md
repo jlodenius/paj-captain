@@ -48,9 +48,8 @@ registered tools and skills alone do not provide full Captain behavior.
 
 ## Setup
 
-Merge a `captain` section into `~/.pi/agent/paj.json` (or `paj.json` under
-`PI_CODING_AGENT_DIR`). Preserve existing `subagents`, `voice`, and other sibling settings; do not
-overwrite the file with this example:
+Merge the `captain` section below into [the shared `paj.json`](https://github.com/jlodenius/paj#shared-settings).
+Keep any existing `subagents` and `voice` settings:
 
 ```json
 {
@@ -74,12 +73,16 @@ Captain reads only its own section and preserves sibling settings when saving. F
 symlink, edit the source instead. The old `captain.json` file is not read; move its contents under
 `captain` in the shared file when upgrading.
 
-Run `/reload`, then `/captain`. Restart Pi instead if you upgraded Pi itself.
+In a main Paj-enabled Pi session, run `/reload`, then `/captain`. Restart Pi instead if you
+upgraded Pi itself. Check `/captain status` shows Captain is on. With another main Paj agent
+running in a project, try: “Ask the main agent in <project> to run the tests and report the
+result.” Use `/captain tasks` to find the assignment. A listed assignment does not mean the
+worker has started or finished.
 
 ## Usage
 
-Captain coordinates rather than doing project work: it delegates to the relevant existing MAIN,
-including busy agents, and launches a new main only when none exists. Each responsible main arranges
+Captain coordinates rather than doing project work: it delegates to the relevant existing main agent,
+including one that is busy, and launches a new main only when none exists. Each responsible main arranges
 its own regular subagent reviews, resolves findings, and reports results and checks. Ordinary mains
 continue to use regular subagents. Workers run independently in normal tmux sessions and keep running
 when Captain exits.
@@ -111,8 +114,9 @@ mode entries never reactivate Captain. There is no model-callable mode tool.
 Workspace rules restrict launches, not communication. These are tool-level checks, not an OS
 sandbox. Queued work is not proof of execution; uncertain actions are not automatically repeated.
 
-Captain reports through ordinary Pi responses. If you use a separate Voice extension, it handles
-speech according to its own settings. No Captain settings migration is needed.
+Captain reports through ordinary Pi responses. The optional [paj-voice](https://github.com/jlodenius/paj-voice)
+extension handles speech according to its own settings. [paj-rc](https://github.com/jlodenius/paj-rc)
+can show a Captain badge in the browser.
 
 ### Erasing saved task ledgers
 
