@@ -56,7 +56,7 @@ test('send passes exact sender/recipient and validates echoed correlation', asyn
   assert.deepEqual(await client.send({ from: a, recipient: b, text: 'hello', kind: 'answer',
     taskId: 'assignment', inReplyTo: a }), sent);
   assert.deepEqual(calls[0].args, ['--json', 'message', 'send', b, '--from', a,
-    '--text', 'hello', '--kind', 'answer', '--task-id', 'assignment', '--in-reply-to', a]);
+    '--text=hello', '--kind', 'answer', '--task-id', 'assignment', '--in-reply-to', a]);
   await assert.rejects(client.send({ from: a, recipient: b, text: 'wrong', kind: 'answer',
     taskId: 'assignment', inReplyTo: a }));
 });

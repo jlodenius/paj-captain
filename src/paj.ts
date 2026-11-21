@@ -84,7 +84,7 @@ export function createPajClient({ run = exec, cwd, env = process.env }: {
           || Buffer.byteLength(text) > 16384 || !kinds.has(kind)
           || (taskId != null && !nonempty(taskId))
           || (inReplyTo != null && !isId(inReplyTo))) throw new Error('Invalid Paj send');
-      const args = ['message', 'send', recipient, '--from', from, '--text', text, '--kind', kind];
+      const args = ['message', 'send', recipient, '--from', from, `--text=${text}`, '--kind', kind];
       if (taskId != null) args.push('--task-id', taskId);
       if (inReplyTo != null) args.push('--in-reply-to', inReplyTo);
       const message = await call(args);

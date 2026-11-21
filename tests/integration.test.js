@@ -39,11 +39,14 @@ test('real isolated Paj roundtrip preserves main-only delegation, questions, rep
   assert.deepEqual((await client.listMain(ownPiId)).map(session => session.id), [worker.id]);
   await assert.rejects(client.resolveMain('child-test', ownPiId));
   const ledger = createTaskStore(join(root, 'state', 'tasks.json'));
+  const assignment = '- Review this workspace.\n- Report findings and checks.';
   const task = ledger.begin({ requestId: 'assignment-one', ownerPiSessionId: ownPiId,
-    ownerPajSessionId: owner.id, target: worker, assignment: 'Review this workspace. Report findings and checks.' });
+    ownerPajSessionId: owner.id, target: worker, assignment });
   const request = await client.send({ from: owner.id, recipient: worker.id, kind: 'request',
     taskId: task.id, text: task.assignment });
   assert.equal(ledger.markSent(task.id, request).status, 'queued');
+  const workerInbox = await command(['message', 'pending', worker.id]);
+  assert.equal(workerInbox.find(message => message.id === request.id)?.text, assignment);
   const obsolete = await client.send({ from: worker.id, recipient: owner.id, kind: 'question',
     taskId: task.id, inReplyTo: request.id, text: 'Should I include uncommitted changes?' });
   const question = await command(['message', 'send', owner.id, '--from', worker.id, '--kind', 'question',
