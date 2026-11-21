@@ -1,21 +1,6 @@
-# Captain reference
+# Task tracking and maintenance
 
 [Back to setup](../README.md).
-
-## Model defaults
-
-Captain keeps your current Pi model and thinking level. New workers use Pi's startup defaults
-unless you supply a model.
-
-Use GPT/Codex for now. Claude bridge does not receive Captain's system-prompt additions, so its
-registered tools and skills alone do not provide full Captain behavior.
-
-## Launch settings
-
-Adjust the workspace paths to your projects. Without an allowlist, Captain can message existing
-agents but cannot launch new ones. Ask Captain to change preferences, or edit its section directly.
-Captain reads only its own section and preserves sibling settings when saving. For a declarative
-symlink, edit the source instead.
 
 ## Inspection and task tracking
 
@@ -64,25 +49,5 @@ of backups or other copies. If interrupted, some files may already be gone: new 
 blocked until you run the command again and confirm a fresh preview. There is no automatic resume.
 Keep this installation and its parent directories stable while using Captain; do not run scripts
 that write task files outside the coordinated extension. Unsafe files, uncertain writes and
-oversized
-scans refuse rather than guessing. Captain advises on enable when its best-effort metadata scan
+oversized scans refuse rather than guessing. Captain advises on enable when its best-effort metadata scan
 finds more than 3 GiB. A partial scan may miss the threshold; nothing is erased automatically.
-
-## Development
-
-Maintained source is TypeScript. Installs build JavaScript in `dist` so Node can run the launcher
-inside any package location; Home Manager builds the same output without npm downloads.
-
-```sh
-npm_config_cache=.cache/npm npm ci --ignore-scripts
-npm run build
-npm run typecheck
-npm test
-```
-
-Git installs build `dist` automatically; rebuild after source changes. Optional integration tests
-use isolated state and local fake providers. Set `PAJ_CAPTAIN_PI_BIN`, `PAJ_CAPTAIN_PAJ_BIN`, and
-`PAJ_CAPTAIN_PAJ_EXTENSION` explicitly to test Pi/Paj. Set `PAJ_CAPTAIN_VOICE_DIR` to a Voice
-source checkout with dev dependencies to test both extensions together with fake audio. The tests
-use Voice's `tests/fixtures/extension.js` harness (verified against `1676208`). No sibling checkout
-is assumed.

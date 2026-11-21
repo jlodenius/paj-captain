@@ -61,4 +61,6 @@ is not current. `/captain off` stops coordination, not workers.
 ## Reference
 
 - [Captain workflow](skills/paj-captain/SKILL.md)
-- [Launch settings, mode lifecycle, ledger maintenance, and development](docs/reference.md)
+- [Model and launch settings](docs/settings.md)
+- [Task tracking, mode lifecycle, and ledger maintenance](docs/operations.md)
+- [Development](docs/development.md)
