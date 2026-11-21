@@ -27,7 +27,7 @@ function fixture(t, { cleanup = true } = {}) {
   };
   const env = {
     PATH: process.env.PATH, HOME: home, PI_CODING_AGENT_DIR: path.join(home, 'agent'),
-    PAJ_RUNTIME_DIR: path.join(home, 'runtime'), PAJ_PROJECT_DIRS: 'projects',
+    PAJ_RUNTIME_DIR: path.join(home, 'runtime'),
     XDG_RUNTIME_DIR: path.join(home, 'xdg-runtime'),
     PAJ_ROLE: 'subagent', PAJ_PARENT_PI_SESSION_ID: 'parent', PAJ_TASK_ID: 'task',
     PAJ_TASK: 'task text', PAJ_SPAWN_ID: 'spawn', PAJ_PI_SESSION_ID: 'child',
@@ -58,7 +58,7 @@ test('launch uses direct argv, absolute helper, exact default tmux, and main ide
   assert.equal(call.options.env.CAPTAIN_ACTIVE, undefined);
   assert.equal(call.options.env.PI_CAPTAIN_ACTIVE, undefined);
   assert.deepEqual(Object.keys(call.options.env).filter(key => key.startsWith('PAJ_')).sort(),
-    ['PAJ_AGENT_NAME', 'PAJ_PROJECT_DIRS', 'PAJ_ROLE', 'PAJ_RUNTIME_DIR']);
+    ['PAJ_AGENT_NAME', 'PAJ_ROLE', 'PAJ_RUNTIME_DIR']);
   assert.equal(call.options.env.PAJ_ROLE, 'primary');
   assert.equal(call.options.env.PAJ_AGENT_NAME, result.agentName);
   assert.equal(call.options.env.PI_CODING_AGENT_DIR, options.env.PI_CODING_AGENT_DIR);

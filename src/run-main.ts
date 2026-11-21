@@ -11,7 +11,7 @@ export function mainEnvironment(source: NodeJS.ProcessEnv, overrides: NodeJS.Pro
       delete env[key];
     }
   }
-  for (const key of ['PAJ_RUNTIME_DIR', 'PAJ_PROJECT_DIRS', 'PI_CODING_AGENT_DIR', 'XDG_RUNTIME_DIR', 'PATH', 'HOME']) {
+  for (const key of ['PAJ_RUNTIME_DIR', 'PI_CODING_AGENT_DIR', 'XDG_RUNTIME_DIR', 'PATH', 'HOME']) {
     delete env[key];
     if (typeof overrides[key] === 'string') env[key] = overrides[key];
   }

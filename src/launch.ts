@@ -115,7 +115,7 @@ export async function launchMain({ workspace, name, model, requestId }: LaunchRe
   if (!path.isAbsolute(nodeExecutable)) throw new Error('Node executable must be absolute');
   const piExecutable = findExecutable(options.piExecutable ?? 'pi', sourceEnv);
   const environment: NodeJS.ProcessEnv = {};
-  for (const key of ['PAJ_RUNTIME_DIR', 'PAJ_PROJECT_DIRS', 'PI_CODING_AGENT_DIR', 'XDG_RUNTIME_DIR', 'PATH', 'HOME']) {
+  for (const key of ['PAJ_RUNTIME_DIR', 'PI_CODING_AGENT_DIR', 'XDG_RUNTIME_DIR', 'PATH', 'HOME']) {
     if (typeof sourceEnv[key] === 'string') environment[key] = sourceEnv[key];
   }
   environment.PI_CODING_AGENT_DIR = agentDir;
