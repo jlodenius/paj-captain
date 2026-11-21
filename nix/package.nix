@@ -27,7 +27,7 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     runHook preInstall
     mkdir -p "$out/share/paj-captain"
-    cp -r dist skills examples package.json README.md LICENSE "$out/share/paj-captain/"
+    cp -r dist skills examples docs package.json README.md LICENSE "$out/share/paj-captain/"
     runHook postInstall
   '';
   meta = {
