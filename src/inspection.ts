@@ -1,9 +1,12 @@
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-export const CAPTAIN_INSPECTION_EVENT = 'paj:captain-inspection:v1';
+export const CAPTAIN_INSPECTION_EVENT = "paj:captain-inspection:v1";
 
-export async function setCaptainInspection(events: Pick<ExtensionAPI['events'], 'emit'> | undefined,
-  piSessionId: string, enabled: boolean): Promise<void> {
+export async function setCaptainInspection(
+  events: Pick<ExtensionAPI["events"], "emit"> | undefined,
+  piSessionId: string,
+  enabled: boolean,
+): Promise<void> {
   let response: Promise<void> | undefined;
   let querying = true;
   try {
@@ -16,7 +19,12 @@ export async function setCaptainInspection(events: Pick<ExtensionAPI['events'], 
         if (querying && !response) response = result;
       },
     });
-  } finally { querying = false; }
-  if (!response) throw new Error('Captain inspection requires a compatible live Paj receiver; reload Paj');
+  } finally {
+    querying = false;
+  }
+  if (!response)
+    throw new Error(
+      "Captain inspection requires a compatible live Paj receiver; reload Paj",
+    );
   await response;
 }

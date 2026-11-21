@@ -6,7 +6,7 @@ export interface WorkspacePolicy {
 export interface CaptainConfig {
   version: 1;
   workspaces: { allow: string[]; exclude: string[] };
-  reporting: { progress: boolean; verbosity: 'brief' | 'detailed' };
+  reporting: { progress: boolean; verbosity: "brief" | "detailed" };
 }
 
 export interface PajSession {
@@ -17,10 +17,11 @@ export interface PajSession {
   role: string;
   projectId: string;
   projectRoot: string;
-  status: 'idle' | 'busy';
+  status: "idle" | "busy";
 }
 
-export type MessageKind = 'request' | 'question' | 'answer' | 'update' | 'result';
+export type MessageKind =
+  "request" | "question" | "answer" | "update" | "result";
 
 export interface PajMessage {
   id: string;
@@ -37,8 +38,8 @@ export interface PajMessage {
   supersededBy?: string;
 }
 
-export type DeliveryStatus = 'prepared' | 'queued' | 'delivery_unknown';
-export type TaskStatus = DeliveryStatus | 'waiting_for_answer' | 'completed';
+export type DeliveryStatus = "prepared" | "queued" | "delivery_unknown";
+export type TaskStatus = DeliveryStatus | "waiting_for_answer" | "completed";
 
 export interface TaskReply {
   questionId: string;
@@ -104,20 +105,24 @@ export interface CommandResult {
   exit_code?: number;
 }
 
-export type RunCommand = (command: string, args: string[], options: {
-  env?: NodeJS.ProcessEnv;
-  cwd?: string;
-  timeout: number;
-  maxBuffer: number;
-  encoding?: 'utf8';
-}) => Promise<CommandResult>;
+export type RunCommand = (
+  command: string,
+  args: string[],
+  options: {
+    env?: NodeJS.ProcessEnv;
+    cwd?: string;
+    timeout: number;
+    maxBuffer: number;
+    encoding?: "utf8";
+  },
+) => Promise<CommandResult>;
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function errorCode(error: unknown): string {
-  return isRecord(error) && typeof error.code === 'string' ? error.code : '';
+  return isRecord(error) && typeof error.code === "string" ? error.code : "";
 }
 
 export function errorMessage(error: unknown): string {
